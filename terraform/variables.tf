@@ -214,13 +214,11 @@ variable "enable_profile_download" {
 
 variable "profile_port" {
   description = <<-EOT
-    構成ファイル配信用の HTTPS ポート。
-    ⚠️ 80/443 は ConoHa が Web 標準ポートとして特別扱いし、カスタム SG ルールでは
-    開かないことがある（要 IPv4v6-Web 定義済みSG）。そのため既定は 8443 とする。
-    iPhone はダウンロード時 Wi-Fi 推奨（携帯回線は高位ポートを遮断する場合あり）。
+    構成ファイル配信用の HTTPS ポート。ConoHa 定義済み SG "IPv4v6-Web" が開くのは
+    80/443 のため既定は 443。iPhone はカメラで QR を読むだけなので回線制限も受けにくい。
   EOT
   type        = number
-  default     = 8443
+  default     = 443
 }
 
 # -----------------------------------------------------------------------------

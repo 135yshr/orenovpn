@@ -59,15 +59,18 @@ locals {
 
 # --- VPS インスタンス --------------------------------------------------------
 resource "openstack_compute_instance_v2" "this" {
-  name            = var.instance_name
-  flavor_id       = data.openstack_compute_flavor_v2.plan.id
-  key_pair        = openstack_compute_keypair_v2.this.name
-  security_groups = [openstack_networking_secgroup_v2.vpn.name]
+  name      = var.instance_name
+  flavor_id = data.openstack_compute_flavor_v2.plan.id
+  key_pair  = openstack_compute_keypair_v2.this.name
 
-  # 重要: 全 SG ルールの作成完了後にインスタンスを作る。
-  # ConoHa はポート作成時点の SG ルールのみを適用し、後から追加された
-  # ルールは稼働中インスタンスに反映しない。並行作成で一部ルールが
-  # 間に合わないと（例: 443）そのポートだけ不通になるため、明示依存で順序を固定する。
+  # カスタム SG（VPN 用）に加え、配信用に ConoHa 定義済み SG "IPv4v6-Web"(80/443) を
+  # アタッチする。ConoHa はカスタム SG の 22 以外の TCP ルールを実質適用しないため、
+  # 443 配信は定義済み SG に委ねる（enable_profile_download 時のみ）。
+  security_groups = var.enable_profile_download ? [
+    openstack_networking_secgroup_v2.vpn.name, "IPv4v6-Web"
+  ] : [openstack_networking_secgroup_v2.vpn.name]
+
+  # 全 SG ルールの作成完了後にインスタンスを作る（作成時点の SG を確実に反映させる）。
   depends_on = [
     openstack_networking_secgroup_rule_v2.ssh,
     openstack_networking_secgroup_rule_v2.wireguard_v4,
@@ -75,7 +78,6 @@ resource "openstack_compute_instance_v2" "this" {
     openstack_networking_secgroup_rule_v2.ikev2_v4,
     openstack_networking_secgroup_rule_v2.ikev2_v6,
     openstack_networking_secgroup_rule_v2.icmp_v4,
-    openstack_networking_secgroup_rule_v2.profile,
   ]
 
   user_data = local.cloud_init

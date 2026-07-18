@@ -84,19 +84,9 @@ resource "openstack_networking_secgroup_rule_v2" "ikev2_v6" {
   description       = "IKEv2 IPv6 ${each.value}"
 }
 
-# --- 構成ファイル配信ポート（make serve-profile 用・作成時に宣言）----------
-# 常時 SG 許可だが待受は serve-profile 実行中のみ（ufw も同時に開閉）。
-resource "openstack_networking_secgroup_rule_v2" "profile" {
-  count             = var.enable_profile_download ? 1 : 0
-  direction         = "ingress"
-  ethertype         = "IPv4"
-  protocol          = "tcp"
-  port_range_min    = var.profile_port
-  port_range_max    = var.profile_port
-  remote_ip_prefix  = "0.0.0.0/0"
-  security_group_id = openstack_networking_secgroup_v2.vpn.id
-  description       = "Profile download (on-demand)"
-}
+# 配信ポート(80/443)は ConoHa 定義済み SG "IPv4v6-Web" をインスタンスに
+# アタッチして開ける（main.tf 参照）。カスタム SG の 443 ルールは ConoHa が
+# 適用しないため、ここには置かない。
 
 # --- ICMP（疎通確認用）------------------------------------------------------
 resource "openstack_networking_secgroup_rule_v2" "icmp_v4" {
