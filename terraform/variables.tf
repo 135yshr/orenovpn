@@ -117,7 +117,26 @@ variable "allowed_ssh_cidr" {
 }
 
 # -----------------------------------------------------------------------------
-# WireGuard 設定
+# VPN プロトコル選択
+# -----------------------------------------------------------------------------
+variable "vpn_protocol" {
+  description = <<-EOT
+    使用する VPN プロトコル。
+      "wireguard" … 高速・軽量。専用アプリ（無料）で接続。QRコード発行。
+      "ikev2"     … iPhone/macOS の標準VPNでアプリ不要接続。証明書認証・
+                    .mobileconfig をワンタップ導入。strongSwan を使用。
+  EOT
+  type        = string
+  default     = "wireguard"
+
+  validation {
+    condition     = contains(["wireguard", "ikev2"], var.vpn_protocol)
+    error_message = "vpn_protocol は \"wireguard\" または \"ikev2\" を指定してください。"
+  }
+}
+
+# -----------------------------------------------------------------------------
+# WireGuard 設定（vpn_protocol = "wireguard" のとき使用）
 # -----------------------------------------------------------------------------
 variable "wg_port" {
   description = "WireGuard の待ち受け UDP ポート"

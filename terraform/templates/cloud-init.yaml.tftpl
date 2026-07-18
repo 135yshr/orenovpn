@@ -30,6 +30,7 @@ write_files:
     permissions: '0600'
     owner: root:root
     content: |
+      VPN_PROTOCOL="${vpn_protocol}"
       WG_PORT="${wg_port}"
       WG_ADDRESS_V4="${wg_address_v4}"
       WG_SUBNET_V4="${wg_subnet_v4}"

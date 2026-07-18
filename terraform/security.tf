@@ -27,8 +27,16 @@ resource "openstack_networking_secgroup_rule_v2" "ssh" {
   description       = "SSH"
 }
 
+locals {
+  is_wireguard = var.vpn_protocol == "wireguard"
+  is_ikev2     = var.vpn_protocol == "ikev2"
+  # IKEv2/IPsec は IKE(500/udp) と NAT-T(4500/udp) を使用
+  ikev2_ports = [500, 4500]
+}
+
 # --- WireGuard（UDP / 全世界）-----------------------------------------------
 resource "openstack_networking_secgroup_rule_v2" "wireguard_v4" {
+  count             = local.is_wireguard ? 1 : 0
   direction         = "ingress"
   ethertype         = "IPv4"
   protocol          = "udp"
@@ -40,7 +48,7 @@ resource "openstack_networking_secgroup_rule_v2" "wireguard_v4" {
 }
 
 resource "openstack_networking_secgroup_rule_v2" "wireguard_v6" {
-  count             = var.wg_enable_ipv6 ? 1 : 0
+  count             = local.is_wireguard && var.wg_enable_ipv6 ? 1 : 0
   direction         = "ingress"
   ethertype         = "IPv6"
   protocol          = "udp"
@@ -49,6 +57,31 @@ resource "openstack_networking_secgroup_rule_v2" "wireguard_v6" {
   remote_ip_prefix  = "::/0"
   security_group_id = openstack_networking_secgroup_v2.vpn.id
   description       = "WireGuard IPv6"
+}
+
+# --- IKEv2/IPsec（UDP 500 / 4500 全世界）-----------------------------------
+resource "openstack_networking_secgroup_rule_v2" "ikev2_v4" {
+  for_each          = local.is_ikev2 ? toset([for p in local.ikev2_ports : tostring(p)]) : toset([])
+  direction         = "ingress"
+  ethertype         = "IPv4"
+  protocol          = "udp"
+  port_range_min    = tonumber(each.value)
+  port_range_max    = tonumber(each.value)
+  remote_ip_prefix  = "0.0.0.0/0"
+  security_group_id = openstack_networking_secgroup_v2.vpn.id
+  description       = "IKEv2 IPv4 ${each.value}"
+}
+
+resource "openstack_networking_secgroup_rule_v2" "ikev2_v6" {
+  for_each          = local.is_ikev2 && var.wg_enable_ipv6 ? toset([for p in local.ikev2_ports : tostring(p)]) : toset([])
+  direction         = "ingress"
+  ethertype         = "IPv6"
+  protocol          = "udp"
+  port_range_min    = tonumber(each.value)
+  port_range_max    = tonumber(each.value)
+  remote_ip_prefix  = "::/0"
+  security_group_id = openstack_networking_secgroup_v2.vpn.id
+  description       = "IKEv2 IPv6 ${each.value}"
 }
 
 # --- ICMP（疎通確認用）------------------------------------------------------

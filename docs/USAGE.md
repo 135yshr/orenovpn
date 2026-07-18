@@ -35,7 +35,55 @@
 
 ---
 
-## iPhone / iPad から接続
+## プロトコルによる接続方法の違い
+
+本テンプレートは `vpn_protocol` で 2 方式を選べます。接続手順が異なります。
+
+| | `wireguard`（既定）| `ikev2` |
+|--|--------------------|---------|
+| アプリ | WireGuard 公式アプリ（無料）| **不要**（iPhone/macOS 標準VPN）|
+| 配布物 | QR コード / .conf | **.mobileconfig**（構成プロファイル）|
+| 導入 | QR スキャン | プロファイルをインストール |
+
+- WireGuard を使う場合 → [iPhone(WireGuard)](#iphone--ipad-から接続wireguard)
+- IKEv2 を使う場合 → [iPhone/Mac(IKEv2)](#iphone--macos-から接続ikev2標準vpn)
+
+---
+
+## iPhone / macOS から接続（IKEv2・標準VPN）
+
+`vpn_protocol = "ikev2"` の場合。**アプリのインストールは不要**です。
+
+### 1. 構成プロファイルを作成・取得
+
+```bash
+make client NAME=iphone          # クライアント作成
+make show   NAME=iphone          # 取得手順(scpコマンド)が表示される
+```
+
+サーバー上の `/etc/orenovpn/clients/iphone.mobileconfig` を手元に取得します
+（`make show` が表示する `scp` コマンドを使用）。
+
+### 2. 端末にインストール
+
+- **iPhone/iPad**: `.mobileconfig` を AirDrop やメールで端末へ送って開く →
+  「設定」に「プロファイルがダウンロードされました」が出る →
+  「設定」→「一般」→「VPN とデバイス管理」→ プロファイルを**インストール**
+- **macOS**: `.mobileconfig` をダブルクリック →「システム設定」→
+  「一般」→「デバイス管理」→ **インストール**
+
+### 3. 接続
+
+「設定」→「VPN」に **orenovpn** が追加されます。トグルを ON で接続完了。
+証明書認証のため**パスワード入力は不要**です。
+
+> オンデマンド接続（自動接続）にしたい場合は、VPN 設定で有効化できます。
+
+---
+
+## iPhone / iPad から接続（WireGuard）
+
+`vpn_protocol = "wireguard"`（既定）の場合。
 
 ### 1. 公式アプリをインストール
 

@@ -26,6 +26,9 @@ image_name = "vmi-debian-13.5-amd64" # OS(Debian13)。make images で確認。De
 # volume_size   = 30                      # GB。512MBプランは30固定/上位プランは100等
 # timezone      = "Asia/Tokyo"
 
+# VPN 方式: "wireguard"(専用アプリ) / "ikev2"(iPhone/macOS標準VPN・アプリ不要)
+vpn_protocol = "wireguard"
+
 # --- ④ SSH アクセス制御（厳格）---------------------------------------------
 admin_user = "vpnops" # 既定名 vpnadmin を避け推測を回避
 ssh_port   = 58022    # 高位の独自ポート

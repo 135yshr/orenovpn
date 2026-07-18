@@ -54,6 +54,7 @@ locals {
     wg_clients          = var.wg_clients
     enable_fail2ban     = var.enable_fail2ban
     enable_auto_updates = var.enable_auto_updates
+    vpn_protocol        = var.vpn_protocol
   })
 }
 

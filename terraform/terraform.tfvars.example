@@ -35,7 +35,12 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
 # 確認: `curl -4 ifconfig.co`
 # allowed_ssh_cidr = ["203.0.113.10/32"]
 
-# --- ⑤ WireGuard（任意）-----------------------------------------------------
+# --- VPN プロトコル（任意）--------------------------------------------------
+# "wireguard"（既定・高速/専用アプリ）または "ikev2"（iPhone/macOS標準VPNで
+# アプリ不要・.mobileconfigワンタップ導入）
+# vpn_protocol = "wireguard"
+
+# --- ⑤ WireGuard（vpn_protocol="wireguard" のとき）-------------------------
 # wg_port        = 51820
 # wg_dns         = "1.1.1.1,1.0.0.1"     # 例: プライバシー重視なら "9.9.9.9"
 # wg_enable_ipv6 = true

@@ -60,30 +60,32 @@ status: ## サーバーの初回ブート完了(SSH疎通)を待つ
 
 setup: ## ソフト導入・VPN構成を実行（deploy後・観察しながら）
 	@echo "スクリプトを転送中..."
-	@$(SCP) scripts/setup.sh scripts/wg-client $(SSH_USER)@$(SSH_HOST):/tmp/
+	@$(SCP) scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client $(SSH_USER)@$(SSH_HOST):/tmp/
 	@echo "サーバー上で構成を実行します（出力を確認してください）..."
 	@$(SSH) 'sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && \
+	         sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && \
+	         sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && \
 	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
 	         sudo /usr/local/sbin/setup.sh 2>&1 | sudo tee /var/log/orenovpn-setup.log && \
-	         rm -f /tmp/setup.sh /tmp/wg-client'
+	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client'
 
 ssh: ## サーバーへ SSH 接続
 	@$(SSH)
 
 client: ## クライアントを追加   例: make client NAME=my-phone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make client NAME=my-phone"; exit 1)
-	@$(SSH) 'sudo wg-client add $(NAME)'
+	@$(SSH) 'sudo vpn-client add $(NAME)'
 
 clients: ## クライアント一覧を表示
-	@$(SSH) 'sudo wg-client list'
+	@$(SSH) 'sudo vpn-client list'
 
-show: ## 設定と QR を再表示   例: make show NAME=my-phone
+show: ## 設定/QR/プロファイルを再表示   例: make show NAME=my-phone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make show NAME=my-phone"; exit 1)
-	@$(SSH) 'sudo wg-client show $(NAME)'
+	@$(SSH) 'sudo vpn-client show $(NAME)'
 
 remove: ## クライアントを削除   例: make remove NAME=my-phone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make remove NAME=my-phone"; exit 1)
-	@$(SSH) 'sudo wg-client remove $(NAME)'
+	@$(SSH) 'sudo vpn-client remove $(NAME)'
 
 destroy: ## VPS を削除（VPN を完全に撤去）
 	$(TF) destroy

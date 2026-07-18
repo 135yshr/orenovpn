@@ -38,7 +38,7 @@ SSH 堅牢化・WireGuard 起動・初期クライアント作成までを自動
 |--------|----------|
 | プロビジョニング | Terraform（OpenStack Provider）|
 | サーバー初期構成 | cloud-init + シェルスクリプト |
-| VPN | WireGuard（Curve25519 / ChaCha20 + 事前共有鍵）|
+| VPN | WireGuard（既定）または IKEv2/IPsec（iPhone/macOS 標準VPN・アプリ不要）を `vpn_protocol` で選択 |
 | OS | Debian 13（cloud-init 対応イメージ）|
 
 ---
@@ -115,6 +115,7 @@ make client NAME=my-laptop
 
 | 変数 | 既定値 | 説明 |
 |------|--------|------|
+| `vpn_protocol` | `wireguard` | `wireguard`（専用アプリ）/ `ikev2`（iPhone/macOS標準VPN・アプリ不要）|
 | `flavor_name` | `g2l-t-c1m512` | プラン（最安 512MB）|
 | `ssh_port` | `22022` | SSH ポート |
 | `allowed_ssh_cidr` | `["0.0.0.0/0"]` | SSH 許可元 IP（**固定 IP に絞ると安全**）|
