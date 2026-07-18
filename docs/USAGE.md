@@ -61,12 +61,33 @@ make client  NAME=iphone         # クライアント作成（初回のみ）
 make profile NAME=iphone         # Mac のカレントディレクトリに iphone.mobileconfig を保存
 ```
 
-> `.mobileconfig` はサーバー上に root 所有で置かれるため、**iPhone から直接は取得できません**。
-> いったん **Mac（PC）にダウンロード**（`make profile`）してから iPhone へ渡します。
->
-> 💡 「VPS で一時Webサーバーを立てて iPhone の Safari で直接DL」は **ConoHa では不可**でした。
-> ConoHa は稼働中インスタンスに**後から追加した SG ルールを反映しない**ため、配信用ポートを
-> オンデマンドで開けません（検証済み）。そのため下記の Mac 経由の受け渡しが確実です。
+> `.mobileconfig` はサーバー上に root 所有で置かれます。取得方法は2通り:
+> - **A. QR で iPhone に直接**（`make serve-profile`）… 下記
+> - **B. Mac に落として転送**（`make profile` → AirDrop/メール/iCloud）… その下
+
+### 1-A. QR で iPhone に直接取得（`make serve-profile`）
+
+```bash
+make client        NAME=iphone     # クライアント作成（初回のみ）
+make serve-profile NAME=iphone     # 一時HTTPS配信 + QR をターミナルに表示
+```
+
+1. ターミナルに QR が出る → iPhone の**カメラで撮る** → Safari が開く
+2. 自己署名のため警告 →「詳細を表示」→「このWebサイトにアクセス」
+3. `.mobileconfig` DL →「設定」→ プロファイルをインストール
+4. 取得できたら `Ctrl-C`（一定時間で自動停止・ufwも自動で閉じる）
+
+> 配信ポート（既定443）は Terraform で**作成時に SG へ宣言**してあります
+> （ConoHa は後付け SG ルールを稼働中インスタンスに反映しないため）。
+> 待ち受けるのは `make serve-profile` 実行中のみで、それ以外は接続拒否されます。
+
+### 1-B. Mac に落として渡す（`make profile`）
+
+QR を使わない/使えない場合。`.mobileconfig` を Mac にダウンロードしてから転送します。
+
+```bash
+make profile NAME=iphone           # ./iphone.mobileconfig を保存
+```
 
 ### 2. iPhone へ渡してインストール
 

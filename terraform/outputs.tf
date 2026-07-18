@@ -17,6 +17,11 @@ output "admin_user" {
   value       = var.admin_user
 }
 
+output "profile_port" {
+  description = "構成ファイル配信ポート（make serve-profile 用）"
+  value       = var.profile_port
+}
+
 output "wireguard_endpoint" {
   description = "WireGuard クライアントが接続するエンドポイント"
   value       = "${openstack_compute_instance_v2.this.access_ip_v4}:${var.wg_port}"
