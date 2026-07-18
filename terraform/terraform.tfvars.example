@@ -1,0 +1,47 @@
+# =============================================================================
+# orenovpn 設定ファイル
+#
+# このファイルを terraform.tfvars にコピーして、自分の環境に合わせて編集する。
+#     cp terraform.tfvars.example terraform.tfvars
+#
+# 最低限、以下 4 つを設定すれば動きます:
+#   - conoha_tenant_name / conoha_user_name / conoha_password
+#   - ssh_public_key
+# それ以外はコメントアウトのままでOK（安全なデフォルト値が使われます）。
+# =============================================================================
+
+# --- ① ConoHa API 認証情報（必須）------------------------------------------
+# コントロールパネル → API メニューから取得
+conoha_tenant_name = "gnct00000000"
+conoha_user_name   = "gncu00000000"
+conoha_password    = "your-api-password-here"
+
+# --- ② SSH 公開鍵（必須）----------------------------------------------------
+# `ssh-keygen -t ed25519` で作った ~/.ssh/id_ed25519.pub の中身を貼り付け
+ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
+
+# --- ③ サーバー構成（任意）--------------------------------------------------
+# instance_name = "orenovpn"
+# flavor_name   = "g2l-t-c1m512"        # 最安 512MB プラン
+# image_name    = "vmi-debian-12.0-amd64"
+# volume_size   = 100                    # GB（ConoHa v3 は 100GB 単位）
+# timezone      = "Asia/Tokyo"
+
+# --- ④ SSH アクセス制御（任意・強く推奨）------------------------------------
+# admin_user = "vpnadmin"
+# ssh_port   = 22022                     # 既定ポート 22 を避けスキャンを軽減
+
+# 自宅/オフィスの固定 IP に絞ると安全性が大きく向上する。
+# 確認: `curl -4 ifconfig.co`
+# allowed_ssh_cidr = ["203.0.113.10/32"]
+
+# --- ⑤ WireGuard（任意）-----------------------------------------------------
+# wg_port        = 51820
+# wg_dns         = "1.1.1.1,1.0.0.1"     # 例: プライバシー重視なら "9.9.9.9"
+# wg_enable_ipv6 = true
+# wg_allowed_ips = "0.0.0.0/0,::/0"      # フルトンネル（全通信を VPN 経由）
+# wg_clients     = ["phone", "laptop"]   # 初期作成するクライアント
+
+# --- ⑥ セキュリティ強化（任意）----------------------------------------------
+# enable_fail2ban     = true
+# enable_auto_updates = true

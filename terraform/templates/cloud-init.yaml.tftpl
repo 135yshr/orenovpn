@@ -1,0 +1,112 @@
+#cloud-config
+# =============================================================================
+# orenovpn サーバーブートストラップ（cloud-init）
+#   - 管理ユーザー作成 + SSH 鍵登録
+#   - SSH 堅牢化（鍵認証のみ・root/パスワード無効・ポート変更）
+#   - 必要パッケージ導入
+#   - WireGuard / ファイアウォール / 各種堅牢化は setup.sh が実施
+# 注意: このファイルは Terraform の templatefile で描画される。
+#       重いシェルスクリプトは base64 で埋め込み、シェル変数との衝突を回避する。
+# =============================================================================
+timezone: ${timezone}
+ssh_pwauth: false
+disable_root: true
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+package_update: true
+package_upgrade: true
+packages:
+  - wireguard
+  - wireguard-tools
+  - iptables
+  - ufw
+  - qrencode
+  - curl
+  - ca-certificates
+%{ if enable_fail2ban ~}
+  - fail2ban
+%{ endif ~}
+%{ if enable_auto_updates ~}
+  - unattended-upgrades
+  - apt-listchanges
+%{ endif ~}
+
+write_files:
+  # --- 設定値（Terraform が生成）------------------------------------------
+  - path: /etc/orenovpn/orenovpn.env
+    permissions: '0600'
+    owner: root:root
+    content: |
+      WG_PORT="${wg_port}"
+      WG_ADDRESS_V4="${wg_address_v4}"
+      WG_SUBNET_V4="${wg_subnet_v4}"
+      WG_ENABLE_IPV6="${wg_enable_ipv6}"
+      WG_ADDRESS_V6="${wg_address_v6}"
+      WG_SUBNET_V6="${wg_subnet_v6}"
+      WG_DNS="${wg_dns}"
+      WG_ALLOWED_IPS="${wg_allowed_ips}"
+      WG_INITIAL_CLIENTS="${join(" ", wg_clients)}"
+      SSH_PORT="${ssh_port}"
+      ENABLE_FAIL2BAN="${enable_fail2ban}"
+      ENABLE_AUTO_UPDATES="${enable_auto_updates}"
+
+  # --- SSH 堅牢化 -----------------------------------------------------------
+  - path: /etc/ssh/sshd_config.d/99-orenovpn.conf
+    permissions: '0644'
+    owner: root:root
+    content: |
+      Port ${ssh_port}
+      PermitRootLogin no
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      X11Forwarding no
+      MaxAuthTries 3
+      AllowUsers ${admin_user}
+
+  # --- カーネルパラメータ（IP 転送 + 堅牢化）------------------------------
+  - path: /etc/sysctl.d/99-orenovpn.conf
+    permissions: '0644'
+    owner: root:root
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv6.conf.all.forwarding=1
+      net.ipv4.conf.all.rp_filter=1
+      net.ipv4.conf.all.accept_redirects=0
+      net.ipv4.conf.all.send_redirects=0
+      net.ipv4.conf.all.accept_source_route=0
+      net.ipv4.conf.all.log_martians=1
+      net.ipv6.conf.all.accept_redirects=0
+      net.ipv4.tcp_syncookies=1
+      kernel.kptr_restrict=2
+
+  # --- サーバーセットアップスクリプト（base64 埋め込み）-------------------
+  - path: /usr/local/sbin/setup.sh
+    permissions: '0700'
+    owner: root:root
+    encoding: b64
+    content: ${setup_script_b64}
+
+  # --- クライアント管理スクリプト（base64 埋め込み）-----------------------
+  - path: /usr/local/sbin/wg-client
+    permissions: '0755'
+    owner: root:root
+    encoding: b64
+    content: ${wg_client_b64}
+
+runcmd:
+  # 新しい SSH 設定を反映（以降は ${ssh_port} 番ポート・鍵認証のみ）
+  - systemctl restart ssh || systemctl restart sshd
+  # WireGuard・ファイアウォール・堅牢化・初期クライアント作成を実行
+  - /usr/local/sbin/setup.sh 2>&1 | tee /var/log/orenovpn-setup.log
+
+final_message: "orenovpn: cloud-init 完了（$UPTIME 秒）。'cloud-init status' で確認できます。"

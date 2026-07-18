@@ -1,0 +1,88 @@
+# =============================================================================
+# メインリソース定義
+#   1. OS イメージ / flavor の参照
+#   2. SSH キーペア登録
+#   3. ブートボリューム作成
+#   4. VPS インスタンス作成（cloud-init で WireGuard を自動構成）
+# =============================================================================
+
+# --- OS イメージの参照 -------------------------------------------------------
+data "openstack_images_image_v2" "os" {
+  name        = var.image_name
+  most_recent = true
+}
+
+# --- flavor(プラン) の参照 ---------------------------------------------------
+data "openstack_compute_flavor_v2" "plan" {
+  name = var.flavor_name
+}
+
+# --- SSH キーペア ------------------------------------------------------------
+resource "openstack_compute_keypair_v2" "this" {
+  name       = "${var.instance_name}-key"
+  public_key = var.ssh_public_key
+}
+
+# --- ブートボリューム（イメージから作成）------------------------------------
+resource "openstack_blockstorage_volume_v3" "boot" {
+  name        = "${var.instance_name}-boot"
+  size        = var.volume_size
+  image_id    = data.openstack_images_image_v2.os.id
+  volume_type = var.volume_type
+
+  # ボリュームは OS を含むため、誤削除防止のライフサイクル制御が必要な場合は
+  # ここに prevent_destroy を追加する。
+}
+
+# --- cloud-init（サーバー初期構成スクリプト）--------------------------------
+locals {
+  cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
+    admin_user          = var.admin_user
+    ssh_public_key      = var.ssh_public_key
+    ssh_port            = var.ssh_port
+    timezone            = var.timezone
+    wg_port             = var.wg_port
+    wg_address_v4       = var.wg_address_v4
+    wg_subnet_v4        = var.wg_subnet_v4
+    wg_enable_ipv6      = var.wg_enable_ipv6
+    wg_address_v6       = var.wg_address_v6
+    wg_subnet_v6        = var.wg_subnet_v6
+    wg_dns              = var.wg_dns
+    wg_allowed_ips      = var.wg_allowed_ips
+    wg_clients          = var.wg_clients
+    enable_fail2ban     = var.enable_fail2ban
+    enable_auto_updates = var.enable_auto_updates
+    # 重いシェルスクリプトは base64 で埋め込み、templatefile の ${...} 衝突を回避
+    setup_script_b64 = filebase64("${path.module}/../scripts/setup.sh")
+    wg_client_b64    = filebase64("${path.module}/../scripts/wg-client")
+  })
+}
+
+# --- VPS インスタンス --------------------------------------------------------
+resource "openstack_compute_instance_v2" "this" {
+  name            = var.instance_name
+  flavor_id       = data.openstack_compute_flavor_v2.plan.id
+  key_pair        = openstack_compute_keypair_v2.this.name
+  security_groups = [openstack_networking_secgroup_v2.vpn.name]
+  user_data       = local.cloud_init
+
+  # ネームタグ（ConoHa コントロールパネルでの表示名）
+  metadata = {
+    instance_name_tag = var.instance_name
+  }
+
+  # ブートボリュームからの起動
+  block_device {
+    uuid                  = openstack_blockstorage_volume_v3.boot.id
+    source_type           = "volume"
+    destination_type      = "volume"
+    boot_index            = 0
+    delete_on_termination = false
+  }
+
+  # user_data / セキュリティグループの変更で再作成が走らないよう抑制。
+  # 構成変更はサーバー上のスクリプトで行う運用とする。
+  lifecycle {
+    ignore_changes = [user_data]
+  }
+}
