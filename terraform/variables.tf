@@ -68,9 +68,13 @@ variable "image_name" {
 }
 
 variable "volume_size" {
-  description = "ブートボリュームサイズ(GB)。ConoHa v3 は 100GB 単位。"
+  description = <<-EOT
+    ブートボリュームサイズ(GB)。プランごとに許容サイズが決まっている。
+    512MB プラン(g2l-t-c1m512) は 30GB 固定。上位プランは 100GB など。
+    プランを変えたらこの値も合わせること。
+  EOT
   type        = number
-  default     = 100
+  default     = 30
 }
 
 variable "volume_type" {

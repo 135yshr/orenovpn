@@ -23,7 +23,7 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... CHANGE_ME"
 # instance_name = "orenovpn"              # ConoHa 上の表示名
 # flavor_name   = "g2l-t-c1m512"          # プラン（最安 512MB）
 image_name = "vmi-debian-13.5-amd64" # OS(Debian13)。make images で確認。Debian/Ubuntu系のみ
-# volume_size   = 100                     # GB（ConoHa v3 は 100GB 単位）
+# volume_size   = 30                      # GB。512MBプランは30固定/上位プランは100等
 # timezone      = "Asia/Tokyo"
 
 # --- ④ SSH アクセス制御 -----------------------------------------------------
