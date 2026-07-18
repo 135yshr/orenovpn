@@ -68,6 +68,8 @@ PY
 sudo bash -c "nohup timeout ${DURATION} python3 /tmp/orenovpn-serve/serve.py >/tmp/orenovpn-serve/serve.log 2>&1 </dev/null &"
 sleep 2
 echo "[diag] 待受: $(sudo ss -tlnp 2>/dev/null | grep ":${PORT} " || echo none)"
+echo "[diag] ufw: $(sudo ufw status 2>/dev/null | grep -E "(^|[^0-9])${PORT}(/|[^0-9])" | tr '\n' ' ' || echo none)"
+echo "[diag] localhost: $(curl -k -sS -m5 -o /dev/null -w '%{http_code}' "https://127.0.0.1:${PORT}/${URLTOKEN}.mobileconfig" 2>/dev/null || echo FAIL)"
 echo "[diag] serve.log: $(sudo cat /tmp/orenovpn-serve/serve.log 2>/dev/null | tr '\n' ' ' | head -c 200)"
 echo
 echo "==================== iPhone の Safari でスキャン ===================="
