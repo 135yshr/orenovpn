@@ -55,13 +55,11 @@ SSH 堅牢化・WireGuard 起動・初期クライアント作成までを自動
 ## クイックスタート
 
 ```bash
-# 1. 設定ファイルを用意
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-$EDITOR terraform.tfvars      # 認証情報と SSH 公開鍵を記入（最小 4 項目）
+# 1. 設定ファイルを用意（プリセットから作るのが簡単・推奨）
+make preset PRESET=balanced   # simple | balanced | hardened から選ぶ
+$EDITOR terraform/terraform.tfvars   # 認証情報と SSH 公開鍵を記入（最小 4 項目）
 
-# 2. デプロイ（プロジェクトルートに戻って make を使うと簡単）
-cd ..
+# 2. デプロイ
 make init
 make deploy                  # terraform apply
 
@@ -87,6 +85,7 @@ make client NAME=my-laptop
 
 | コマンド | 内容 |
 |----------|------|
+| `make preset PRESET=x` | 設定プリセットを適用（simple/balanced/hardened）|
 | `make deploy` | VPS を作成/更新 |
 | `make status` | 初期設定の完了を待つ |
 | `make client NAME=x` | クライアント x を追加（QR 表示）|
@@ -101,8 +100,10 @@ make client NAME=my-laptop
 
 ## 設定のカスタマイズ
 
-すべて `terraform/terraform.tfvars` で変更できます（詳細は
-[`docs/SETUP.md`](docs/SETUP.md)）。よく変える項目:
+まず用途に合った**プリセット**（`make preset PRESET=simple|balanced|hardened`）で
+土台を作り、必要なら `terraform/terraform.tfvars` を個別に調整します
+（プリセットの比較は [`terraform/presets/README.md`](terraform/presets/README.md)、
+全変数の詳細は [`docs/SETUP.md`](docs/SETUP.md)）。よく変える項目:
 
 | 変数 | 既定値 | 説明 |
 |------|--------|------|
@@ -139,6 +140,7 @@ orenovpn/
 │   ├── security.tf              # セキュリティグループ
 │   ├── outputs.tf               # 接続情報の出力
 │   ├── terraform.tfvars.example # ★設定ファイルの雛形
+│   ├── presets/                 # 用途別の設定プリセット（simple/balanced/hardened）
 │   └── templates/
 │       └── cloud-init.yaml.tftpl
 ├── scripts/

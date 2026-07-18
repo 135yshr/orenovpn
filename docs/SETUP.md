@@ -94,14 +94,45 @@ cat ~/.ssh/orenovpn.pub    # この内容を ssh_public_key に貼る
 >
 > 既定パス（`~/.ssh/id_ed25519`）に鍵を作った場合は、これらの対応は不要です。
 
-## 2. 設定ファイルの編集
+## 2. 設定ファイルの作成
+
+設定は `terraform/terraform.tfvars` に書きます。作り方は2通りあります。
+
+### 方法A: プリセットから作る（推奨）
+
+用途に合わせた設定が方針ごと入るプリセットを用意しています。任意項目まで含めて
+最適化された状態から始められるので、**基本はこちらを推奨**します。
+
+```bash
+# プロジェクトルートで、いずれかを適用
+make preset PRESET=simple      # ① 簡単・すぐ使える（全開放・既定）
+make preset PRESET=balanced    # ② 最低限セキュリティ（推奨ベースライン）
+make preset PRESET=hardened    # ③ できうる最高のセキュア
+```
+
+| プリセット | SSH接続元 | SSHポート | DNS | 想定 |
+|-----------|-----------|-----------|-----|------|
+| `simple` | 全開放 | 22022 | Cloudflare | まず試す / 接続元IPが変わる環境 |
+| `balanced` | 自分のIPに制限 | 40022 | Cloudflare | 常用の推奨ベースライン |
+| `hardened` | 固定IPのみ厳格 | 58022 | Quad9 | セキュリティ最優先 |
+
+適用すると `terraform/terraform.tfvars` が生成されます（既存ファイルがあると
+上書きを拒否。上書きするなら `FORCE=1` を付与）。詳細は
+[`terraform/presets/README.md`](../terraform/presets/README.md) を参照。
+
+### 方法B: 雛形をコピーして自分で埋める
+
+全変数を見ながら手で設定したい場合:
 
 ```bash
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
 ```
 
-最低限、以下の 4 項目を埋めれば動きます。
+### 編集する項目
+
+どちらの方法でも、生成された `terraform/terraform.tfvars` を開いて
+**最低限この 4 項目**を自分の値に書き換えます。
 
 ```hcl
 conoha_tenant_name = "gnct12345678"
@@ -109,6 +140,10 @@ conoha_user_name   = "gncu12345678"
 conoha_password    = "********"
 ssh_public_key     = "ssh-ed25519 AAAAC3Nza... orenovpn"
 ```
+
+> プリセット `balanced` / `hardened` を選んだ場合は、加えて
+> `allowed_ssh_cidr` を**自分のグローバルIP**（`curl -4 ifconfig.co` で確認）に
+> 書き換えてください。
 
 ### 使用可能な OS / バージョンの確認（重要）
 
