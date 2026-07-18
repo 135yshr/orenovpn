@@ -108,13 +108,15 @@ cat ~/.ssh/orenovpn.pub    # この内容を ssh_public_key に貼る
 make preset PRESET=simple      # ① 簡単・すぐ使える（全開放・既定）
 make preset PRESET=balanced    # ② 最低限セキュリティ（推奨ベースライン）
 make preset PRESET=hardened    # ③ できうる最高のセキュア
+make preset PRESET=ikev2       # ④ Apple標準VPN（iPhone/macOS・アプリ不要）
 ```
 
-| プリセット | SSH接続元 | SSHポート | DNS | 想定 |
-|-----------|-----------|-----------|-----|------|
-| `simple` | 全開放 | 22022 | Cloudflare | まず試す / 接続元IPが変わる環境 |
-| `balanced` | 自分のIPに制限 | 40022 | Cloudflare | 常用の推奨ベースライン |
-| `hardened` | 固定IPのみ厳格 | 58022 | Quad9 | セキュリティ最優先 |
+| プリセット | VPN方式 | SSH接続元 | SSHポート | 想定 |
+|-----------|---------|-----------|-----------|------|
+| `simple` | WireGuard | 全開放 | 22022 | まず試す / 接続元IPが変わる環境 |
+| `balanced` | WireGuard | 自分のIPに制限 | 40022 | 常用の推奨ベースライン |
+| `hardened` | WireGuard | 固定IPのみ厳格 | 58022 | セキュリティ最優先 |
+| `ikev2` | IKEv2 | 全開放 | 40022 | iPhone/macOS 標準VPNでアプリ不要接続 |
 
 適用すると `terraform/terraform.tfvars` が生成されます（既存ファイルがあると
 上書きを拒否。上書きするなら `FORCE=1` を付与）。詳細は

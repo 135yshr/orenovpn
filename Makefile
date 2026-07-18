@@ -26,12 +26,13 @@ help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 
-preset: ## 設定プリセットを適用  例: make preset PRESET=balanced  (simple|balanced|hardened)
+preset: ## 設定プリセットを適用  例: make preset PRESET=balanced  (simple|balanced|hardened|ikev2)
 	@case "$(PRESET)" in \
 	  simple)   f=presets/01-simple.tfvars ;; \
 	  balanced) f=presets/02-balanced.tfvars ;; \
 	  hardened) f=presets/03-hardened.tfvars ;; \
-	  *) echo "PRESET=simple|balanced|hardened のいずれかを指定してください"; exit 1 ;; \
+	  ikev2)    f=presets/04-ikev2-apple.tfvars ;; \
+	  *) echo "PRESET=simple|balanced|hardened|ikev2 のいずれかを指定してください"; exit 1 ;; \
 	esac; \
 	if [ -f terraform/terraform.tfvars ] && [ "$(FORCE)" != "1" ]; then \
 	  echo "terraform/terraform.tfvars は既に存在します。上書きするなら FORCE=1 を付けてください。"; exit 1; \
