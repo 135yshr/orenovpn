@@ -54,23 +54,29 @@
 
 `vpn_protocol = "ikev2"` の場合。**アプリのインストールは不要**です。
 
-### 1. 構成プロファイルを作成・取得
+### 1. 構成プロファイルを作成・手元にダウンロード
 
 ```bash
-make client NAME=iphone          # クライアント作成
-make show   NAME=iphone          # 取得手順(scpコマンド)が表示される
+make client  NAME=iphone         # クライアント作成（初回のみ）
+make profile NAME=iphone         # Mac のカレントディレクトリに iphone.mobileconfig を保存
 ```
 
-サーバー上の `/etc/orenovpn/clients/iphone.mobileconfig` を手元に取得します
-（`make show` が表示する `scp` コマンドを使用）。
+> `.mobileconfig` はサーバー上に root 所有で置かれるため、**iPhone から直接は取得できません**。
+> いったん **Mac にダウンロード**（`make profile`）してから iPhone へ渡します。
 
-### 2. 端末にインストール
+### 2. iPhone へ渡してインストール
 
-- **iPhone/iPad**: `.mobileconfig` を AirDrop やメールで端末へ送って開く →
-  「設定」に「プロファイルがダウンロードされました」が出る →
-  「設定」→「一般」→「VPN とデバイス管理」→ プロファイルを**インストール**
-- **macOS**: `.mobileconfig` をダブルクリック →「システム設定」→
-  「一般」→「デバイス管理」→ **インストール**
+Mac に保存された `iphone.mobileconfig` を iPhone へ転送します（いずれか）:
+
+- **AirDrop（最も簡単）**: Finder で `iphone.mobileconfig` を右クリック →「共有」→「AirDrop」→ iPhone を選択
+- メール / iCloud Drive に置いて iPhone で開く
+
+iPhone 側:
+1. 受け取った `.mobileconfig` を開く →「設定」に「プロファイルがダウンロードされました」
+2. 「設定」→「一般」→「VPN とデバイス管理」→ プロファイルを**インストール**
+
+**macOS 自身**で使う場合は、`make profile NAME=mac` で保存した `.mobileconfig` を
+ダブルクリック →「システム設定」→「一般」→「デバイス管理」→ **インストール**。
 
 ### 3. 接続
 

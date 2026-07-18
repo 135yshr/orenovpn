@@ -24,7 +24,7 @@ SSH_KEY ?= $(ORENOVPN_SSH_KEY)
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)
 SCP = scp -P $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),)
 
-.PHONY: help preset init plan deploy apply status setup ssh client clients show remove destroy fmt validate images volume-types
+.PHONY: help preset init plan deploy apply status setup ssh client clients show profile remove destroy fmt validate images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -87,6 +87,14 @@ clients: ## クライアント一覧を表示
 show: ## 設定/QR/プロファイルを再表示   例: make show NAME=my-phone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make show NAME=my-phone"; exit 1)
 	@$(SSH) 'sudo vpn-client show $(NAME)'
+
+profile: ## 構成ファイルを手元にDL(iOSはAirDropで転送)  例: make profile NAME=iphone
+	@test -n "$(NAME)" || (echo "NAME を指定してください: make profile NAME=iphone"; exit 1)
+	@$(SSH) 'sudo cat /etc/orenovpn/clients/$(NAME).mobileconfig 2>/dev/null || sudo cat /etc/orenovpn/clients/$(NAME).conf 2>/dev/null' > "$(NAME).download"; \
+	if [ ! -s "$(NAME).download" ]; then echo "取得失敗: クライアント '$(NAME)' が見つかりません（make clients で確認）"; rm -f "$(NAME).download"; exit 1; fi; \
+	if head -1 "$(NAME).download" | grep -qi xml; then mv "$(NAME).download" "$(NAME).mobileconfig"; f="$(NAME).mobileconfig"; else mv "$(NAME).download" "$(NAME).conf"; f="$(NAME).conf"; fi; \
+	echo "保存しました: ./$$f"; \
+	echo "→ iPhoneへ: Finderで $$f を右クリック → 共有 → AirDrop で iPhone を選択"
 
 remove: ## クライアントを削除   例: make remove NAME=my-phone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make remove NAME=my-phone"; exit 1)
