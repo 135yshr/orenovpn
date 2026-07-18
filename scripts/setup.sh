@@ -124,22 +124,27 @@ setup_ikev2() {
   mkdir -p "$PKI"; chmod 700 "$PKI"
   umask 077
 
-  # --- CA（初回のみ生成。既存なら再利用してクライアント証明書の連続性を保つ）
+  # --- CA（初回のみ生成）。strongSwan の厳格な検証を通すため keyCertSign/cRLSign と
+  #     subjectKeyIdentifier を必ず付与する（これが無いと "no trusted public key" になる）
   if [ ! -f "$PKI/ca-key.pem" ]; then
     openssl genrsa -out "$PKI/ca-key.pem" 4096
     openssl req -x509 -new -nodes -key "$PKI/ca-key.pem" -sha256 -days 3650 \
-      -subj "/CN=orenovpn CA" -out "$PKI/ca-cert.pem"
+      -subj "/CN=orenovpn CA" \
+      -addext "basicConstraints=critical,CA:TRUE" \
+      -addext "keyUsage=critical,keyCertSign,cRLSign" \
+      -addext "subjectKeyIdentifier=hash" \
+      -out "$PKI/ca-cert.pem"
     log "IKEv2 CA を生成"
   fi
 
-  # --- サーバー証明書（SAN にパブリック IP を含める）。IP 変化時は作り直す
+  # --- サーバー証明書（SAN=IP + serverAuth + SKI/AKI）。IP 変化時は作り直す
   if [ ! -f "$PKI/server-cert.pem" ] || ! grep -q "${SERVER_IP}" "$PKI/server-san.txt" 2>/dev/null; then
     echo "${SERVER_IP}" > "$PKI/server-san.txt"
     openssl genrsa -out "$PKI/server-key.pem" 4096
     openssl req -new -key "$PKI/server-key.pem" -subj "/CN=${SERVER_IP}" -out "$PKI/server.csr"
     openssl x509 -req -in "$PKI/server.csr" -CA "$PKI/ca-cert.pem" -CAkey "$PKI/ca-key.pem" \
       -CAcreateserial -days 3650 -sha256 \
-      -extfile <(printf 'subjectAltName=IP:%s\nextendedKeyUsage=serverAuth\n' "${SERVER_IP}") \
+      -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectAltName=IP:%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "${SERVER_IP}") \
       -out "$PKI/server-cert.pem"
     rm -f "$PKI/server.csr"
     log "IKEv2 サーバー証明書を生成 (SAN=IP:${SERVER_IP})"
