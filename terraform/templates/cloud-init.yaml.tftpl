@@ -89,19 +89,19 @@ write_files:
       net.ipv4.tcp_syncookies=1
       kernel.kptr_restrict=2
 
-  # --- サーバーセットアップスクリプト（base64 埋め込み）-------------------
+  # --- サーバーセットアップスクリプト -------------------------------------
   - path: /usr/local/sbin/setup.sh
     permissions: '0700'
     owner: root:root
-    encoding: b64
-    content: ${setup_script_b64}
+    content: |
+      ${indent(6, setup_script)}
 
-  # --- クライアント管理スクリプト（base64 埋め込み）-----------------------
+  # --- クライアント管理スクリプト -----------------------------------------
   - path: /usr/local/sbin/wg-client
     permissions: '0755'
     owner: root:root
-    encoding: b64
-    content: ${wg_client_b64}
+    content: |
+      ${indent(6, wg_client)}
 
 runcmd:
   # 新しい SSH 設定を反映（以降は ${ssh_port} 番ポート・鍵認証のみ）

@@ -52,9 +52,11 @@ locals {
     wg_clients          = var.wg_clients
     enable_fail2ban     = var.enable_fail2ban
     enable_auto_updates = var.enable_auto_updates
-    # 重いシェルスクリプトは base64 で埋め込み、templatefile の ${...} 衝突を回避
-    setup_script_b64 = filebase64("${path.module}/../scripts/setup.sh")
-    wg_client_b64    = filebase64("${path.module}/../scripts/wg-client")
+    # シェルスクリプトはプレーンテキストで埋め込む（base64 の 33% 増を避け
+    # user_data 16KiB 制限に収める）。テンプレートに挿入される変数値は
+    # templatefile で再解釈されないため、スクリプト内の ${...} は安全。
+    setup_script = file("${path.module}/../scripts/setup.sh")
+    wg_client    = file("${path.module}/../scripts/wg-client")
   })
 }
 
@@ -65,10 +67,7 @@ resource "openstack_compute_instance_v2" "this" {
   key_pair        = openstack_compute_keypair_v2.this.name
   security_groups = [openstack_networking_secgroup_v2.vpn.name]
 
-  # cloud-init を gzip 圧縮して渡す（ConoHa の user_data 16KiB 制限対策）。
-  # cloud-init は gzip を自動解凍し、OpenStack プロバイダは base64 入力を
-  # デコードして送るため、圧縮済みバイトがそのまま cloud-init に届く。
-  user_data = base64gzip(local.cloud_init)
+  user_data = local.cloud_init
 
   # ネームタグ（ConoHa コントロールパネルでの表示名）
   metadata = {
