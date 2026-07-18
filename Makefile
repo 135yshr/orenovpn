@@ -5,16 +5,20 @@
 # =============================================================================
 TF := terraform -chdir=terraform
 
+# ローカル設定（任意・gitignore 済み）。SSH_KEY 等を毎回指定せず固定できる。
+#   orenovpn.local.mk に  SSH_KEY = ~/.ssh/orenovpn  と書いておけば以降は省略可。
+-include orenovpn.local.mk
+
 # 接続情報は terraform の出力から取得（apply 完了後に有効になる）。
 # `=`（遅延展開）なので、apply 前の init/deploy では評価されない。
 SSH_HOST = $(shell $(TF) output -raw server_ip 2>/dev/null)
 SSH_PORT = 22
 SSH_USER = $(shell $(TF) output -raw admin_user 2>/dev/null)
 
-# 任意: 既定パス(~/.ssh/id_ed25519 等)以外に秘密鍵を置いた場合に指定する。
-#   例)  make ssh SSH_KEY=~/.ssh/orenovpn
-# ~/.ssh/config や ssh-add で鍵を解決している場合は指定不要。
-SSH_KEY ?=
+# 秘密鍵のパス。既定パス(~/.ssh/id_ed25519 等)以外なら指定する。優先順位:
+#   1) コマンドで SSH_KEY=... を明示   2) orenovpn.local.mk   3) 環境変数 ORENOVPN_SSH_KEY
+# ~/.ssh/config や ssh-add で解決している場合は不要。
+SSH_KEY ?= $(ORENOVPN_SSH_KEY)
 
 # 実際に叩く ssh / scp コマンド（SSH_KEY 指定時のみ -i を付与）
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)

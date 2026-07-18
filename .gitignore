@@ -30,6 +30,9 @@ id_ed25519*
 id_rsa*
 *.pem
 
+# ローカル make 設定（各自の鍵パス等）
+orenovpn.local.mk
+
 # OS / エディタ
 .DS_Store
 *.swp
