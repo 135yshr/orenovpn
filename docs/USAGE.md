@@ -29,6 +29,10 @@
 > `NAME` は英数字・ハイフン・アンダースコアのみ。デバイスごとに別名を付けます
 > （例: `iphone`, `ipad`, `macbook`, `work-pc`）。**同じ設定を複数端末で使い回さない**でください。
 
+> 💡 SSH 鍵を既定以外のパスに作った場合は、各コマンドに `SSH_KEY=` を付けます。
+> 例: `make client NAME=iphone SSH_KEY=~/.ssh/orenovpn`
+> （`~/.ssh/config` に書いておけば指定不要。詳細は [SETUP.md](SETUP.md#1-3-ssh-鍵ペアを作成)）
+
 ---
 
 ## iPhone / iPad から接続

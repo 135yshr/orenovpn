@@ -17,6 +17,11 @@ output "ssh_port" {
   value       = var.ssh_port
 }
 
+output "admin_user" {
+  description = "SSH 管理ユーザー名"
+  value       = var.admin_user
+}
+
 output "wireguard_endpoint" {
   description = "WireGuard クライアントが接続するエンドポイント"
   value       = "${openstack_compute_instance_v2.this.access_ip_v4}:${var.wg_port}"
