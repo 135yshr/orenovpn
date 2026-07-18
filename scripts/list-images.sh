@@ -25,8 +25,9 @@ command -v python3 >/dev/null || die "python3 が必要です"
 # terraform.tfvars から key = "value" 形式の値を取り出す
 getvar() {
   [ -f "$TFVARS" ] || return 0
-  grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1 \
-    | sed -E 's/^[^=]*=[[:space:]]*"?([^"#]*[^"# ])"?.*$/\1/'
+  # キーが無い場合 grep が非ゼロ終了して set -e で落ちるのを防ぐため || true
+  { grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1 \
+    | sed -E 's/^[^=]*=[[:space:]]*"?([^"#]*[^"# ])"?.*$/\1/'; } || true
 }
 
 # 認証情報: OS_* 環境変数を優先し、無ければ terraform.tfvars から取得

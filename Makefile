@@ -19,7 +19,7 @@ SSH_KEY ?=
 # 実際に叩く ssh コマンド（SSH_KEY 指定時のみ -i を付与）
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)
 
-.PHONY: help preset init plan deploy apply status ssh client clients show remove destroy fmt validate images
+.PHONY: help preset init plan deploy apply status ssh client clients show remove destroy fmt validate images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -41,6 +41,9 @@ preset: ## 設定プリセットを適用  例: make preset PRESET=balanced  (si
 
 images: ## 利用可能な OS イメージ名を確認   例: make images FILTER=debian
 	@./scripts/list-images.sh $(FILTER)
+
+volume-types: ## 利用可能なボリュームタイプ名を確認
+	@./scripts/list-volume-types.sh
 
 init: ## Terraform を初期化（最初に一度）
 	$(TF) init

@@ -74,9 +74,12 @@ variable "volume_size" {
 }
 
 variable "volume_type" {
-  description = "ブロックストレージのボリュームタイプ名"
+  description = <<-EOT
+    ブロックストレージのボリュームタイプ名。ブート用は末尾が -boot のもの。
+    利用可能な値は `make volume-types` で確認できる（例: c3j1-ds02-boot）。
+  EOT
   type        = string
-  default     = "c3j1-ds02"
+  default     = "c3j1-ds02-boot"
 }
 
 # -----------------------------------------------------------------------------
