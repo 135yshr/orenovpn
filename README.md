@@ -94,6 +94,7 @@ make client NAME=my-laptop
 | `make show NAME=x` | 設定と QR を再表示 |
 | `make remove NAME=x` | クライアント x を削除 |
 | `make ssh` | サーバーへ SSH |
+| `make images` | 利用可能な OS イメージ名を確認 |
 | `make destroy` | VPN を完全撤去 |
 
 ---
@@ -142,7 +143,8 @@ orenovpn/
 │       └── cloud-init.yaml.tftpl
 ├── scripts/
 │   ├── setup.sh                 # サーバー初期構成（cloud-init から実行）
-│   └── wg-client                # クライアント管理ツール
+│   ├── wg-client                # クライアント管理ツール
+│   └── list-images.sh           # 利用可能な OS イメージの確認
 └── docs/
     ├── SETUP.md                 # 詳細セットアップ
     ├── USAGE.md                 # 使い方（各デバイスからの接続・管理）

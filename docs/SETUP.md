@@ -110,18 +110,37 @@ conoha_password    = "********"
 ssh_public_key     = "ssh-ed25519 AAAAC3Nza... orenovpn"
 ```
 
-### イメージ名・ボリュームタイプの確認（うまく動かない場合）
+### 使用可能な OS / バージョンの確認（重要）
 
-イメージ名やボリュームタイプは地域・時期で変わることがあります。
-[OpenStack CLI](https://doc.conoha.jp/reference/openstack-cli/) で正確な値を確認できます。
+提供される OS とバージョンは時期で更新されます（例: 2026年時点で Debian は 13.5 / 12.5）。
+`image_name` は**完全一致**で検索されるため、デプロイ前に現在の正確な名称を確認してください。
+
+**方法1: `make images`（推奨・追加ツール不要）**
+
+`terraform.tfvars` に認証情報を書いていれば、そのまま利用可能イメージを一覧できます。
 
 ```bash
-openstack image list        # image_name（例: vmi-debian-13.0-amd64）
+make images                 # 全 OS イメージ
+make images FILTER=debian   # debian で絞り込み
+```
+
+出力された `vmi-...` の文字列をそのまま `terraform.tfvars` の `image_name` に設定します。
+
+**方法2: 公式ドキュメント**
+
+- [ConoHa OSテンプレート一覧](https://doc.conoha.jp/products/vps-v3/image-v3/image-os-v3/)
+- [Debian のバージョン](https://doc.conoha.jp/products/vps-v3/image-v3/image-os-v3/debian-v3/)
+
+**方法3: OpenStack CLI**（CLI を導入している場合）
+
+```bash
+openstack image list         # image_name
 openstack flavor list        # flavor_name（例: g2l-t-c1m512）
 openstack volume type list   # volume_type
 ```
 
-確認した値を `terraform.tfvars` に設定してください。
+> ⚠️ 対応 OS は **Debian / Ubuntu 系のみ**です（サーバー構成が apt/ufw 前提のため）。
+> RHEL 系（AlmaLinux 等）を使う場合は `scripts/setup.sh` と cloud-init の書き換えが必要です。
 
 ## 3. デプロイ
 

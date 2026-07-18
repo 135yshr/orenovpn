@@ -19,11 +19,14 @@ SSH_KEY ?=
 # 実際に叩く ssh コマンド（SSH_KEY 指定時のみ -i を付与）
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)
 
-.PHONY: help init plan deploy apply status ssh client clients show remove destroy fmt validate
+.PHONY: help init plan deploy apply status ssh client clients show remove destroy fmt validate images
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+
+images: ## 利用可能な OS イメージ名を確認   例: make images FILTER=debian
+	@./scripts/list-images.sh $(FILTER)
 
 init: ## Terraform を初期化（最初に一度）
 	$(TF) init
