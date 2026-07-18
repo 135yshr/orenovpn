@@ -59,7 +59,14 @@ write_files:
       AllowUsers ${admin_user}
 
 runcmd:
-  # 新しい SSH 設定を反映（以降は ${ssh_port} 番・鍵認証のみ）→ SSH 疎通確立
-  - systemctl restart ssh || systemctl restart sshd
+  # Debian 13 / 新しめの Ubuntu は SSH が systemd ソケットアクティベーション
+  # (ssh.socket) で待受ポートを制御するため、sshd_config の Port が無視され
+  # 22 番のまま待ち受けてしまう。socket を無効化し ssh.service に Port ${ssh_port}
+  # を適用する（socket が無いイメージでは disable が失敗しても無害）。
+  - systemctl disable --now ssh.socket 2>/dev/null || true
+  - systemctl enable ssh.service 2>/dev/null || systemctl enable sshd 2>/dev/null || true
+  - systemctl restart ssh.service 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd
+  # 待受ポートを確認してログに残す（デバッグ用）
+  - (ss -tlnp | grep -q ":${ssh_port} " && echo "orenovpn: sshd listening on ${ssh_port}") || echo "orenovpn: WARNING sshd not on ${ssh_port}"
 
 final_message: "orenovpn phase1: cloud-init 完了。'make setup' で構成を続行してください。"
