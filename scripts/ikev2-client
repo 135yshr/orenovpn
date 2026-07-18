@@ -41,9 +41,14 @@ cmd_add() {
     -out "${PKI}/${name}-cert.pem" 2>/dev/null
   rm -f "${PKI}/${name}.csr"
 
-  # PKCS12（鍵+証明書+CA）。プロファイル内に埋め込むためのパスワードを生成
+  # PKCS12（鍵+証明書+CA）。プロファイル内に埋め込むためのパスワードを生成。
+  # ⚠️ OpenSSL 3.x 既定(AES-256/PBKDF2)の PKCS12 は Apple のプロファイル
+  #   インストーラが読めず "certificate could not be verified" になる。
+  #   Apple 互換の旧来形式(3DES/SHA1)で出力する必要がある(-legacy)。
   local p12pass; p12pass="$(openssl rand -hex 12)"
-  openssl pkcs12 -export -inkey "${PKI}/${name}-key.pem" -in "${PKI}/${name}-cert.pem" \
+  openssl pkcs12 -export -legacy -macalg sha1 \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES \
+    -inkey "${PKI}/${name}-key.pem" -in "${PKI}/${name}-cert.pem" \
     -certfile "${PKI}/ca-cert.pem" -passout "pass:${p12pass}" -out "${PKI}/${name}.p12" 2>/dev/null
 
   # base64（CA は DER 形式）
