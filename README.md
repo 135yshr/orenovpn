@@ -59,19 +59,26 @@ SSH 堅牢化・WireGuard 起動・初期クライアント作成までを自動
 make preset PRESET=balanced   # simple | balanced | hardened から選ぶ
 $EDITOR terraform/terraform.tfvars   # 認証情報と SSH 公開鍵を記入（最小 4 項目）
 
-# 2. デプロイ
+# 2. デプロイ（フェーズ1: VPS 作成・最小構成で高速起動）
 make init
 make deploy                  # terraform apply
 
-# 3. 初期設定の完了を待つ（初回 3〜5 分）
+# 3. SSH 疎通を確認（初回ブート 1〜2 分）
 make status
 
-# 4. クライアントの QR コードを表示してスマホでスキャン
-make show NAME=client1
+# 4. ソフト導入・VPN 構成（フェーズ2: 進捗を画面で確認できる）
+make setup
 
-# 5. クライアントを追加したいとき
+# 5. クライアントの QR コードを表示してスマホでスキャン
+make show NAME=phone
+
+# 6. クライアントを追加したいとき
 make client NAME=my-laptop
 ```
+
+> **2 フェーズ構成**: まず最小構成で起動して SSH 疎通を確認（フェーズ1）、その後に
+> WireGuard 等の導入・構成を SSH 経由で実行（フェーズ2 = `make setup`）。
+> 初回ブートが速く確実で、構成の失敗も画面で確認・再実行できます。
 
 `make` を使わない場合は各コマンドが `terraform apply` 後の出力（`next_steps`）に
 表示されます。
@@ -86,8 +93,9 @@ make client NAME=my-laptop
 | コマンド | 内容 |
 |----------|------|
 | `make preset PRESET=x` | 設定プリセットを適用（simple/balanced/hardened）|
-| `make deploy` | VPS を作成/更新 |
-| `make status` | 初期設定の完了を待つ |
+| `make deploy` | VPS を作成/更新（フェーズ1）|
+| `make status` | SSH 疎通を待つ |
+| `make setup` | ソフト導入・VPN 構成（フェーズ2）|
 | `make client NAME=x` | クライアント x を追加（QR 表示）|
 | `make clients` | クライアント一覧 |
 | `make show NAME=x` | 設定と QR を再表示 |

@@ -16,10 +16,11 @@ SSH_USER = $(shell $(TF) output -raw admin_user 2>/dev/null)
 # ~/.ssh/config や ssh-add で鍵を解決している場合は指定不要。
 SSH_KEY ?=
 
-# 実際に叩く ssh コマンド（SSH_KEY 指定時のみ -i を付与）
+# 実際に叩く ssh / scp コマンド（SSH_KEY 指定時のみ -i を付与）
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)
+SCP = scp -P $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),)
 
-.PHONY: help preset init plan deploy apply status ssh client clients show remove destroy fmt validate images volume-types
+.PHONY: help preset init plan deploy apply status setup ssh client clients show remove destroy fmt validate images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -54,8 +55,17 @@ plan: ## 変更内容を確認
 deploy apply: ## VPS を作成/更新
 	$(TF) apply
 
-status: ## サーバーの初期設定完了を待つ
-	@$(SSH) 'cloud-init status --wait'
+status: ## サーバーの初回ブート完了(SSH疎通)を待つ
+	@$(SSH) 'cloud-init status --wait || true; echo "SSH 疎通OK"'
+
+setup: ## ソフト導入・VPN構成を実行（deploy後・観察しながら）
+	@echo "スクリプトを転送中..."
+	@$(SCP) scripts/setup.sh scripts/wg-client $(SSH_USER)@$(SSH_HOST):/tmp/
+	@echo "サーバー上で構成を実行します（出力を確認してください）..."
+	@$(SSH) 'sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && \
+	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
+	         sudo /usr/local/sbin/setup.sh 2>&1 | sudo tee /var/log/orenovpn-setup.log && \
+	         rm -f /tmp/setup.sh /tmp/wg-client'
 
 ssh: ## サーバーへ SSH 接続
 	@$(SSH)

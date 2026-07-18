@@ -192,28 +192,41 @@ make deploy    # terraform apply（確認プロンプトで yes を入力）
 apply 完了後、接続情報（`next_steps`）が表示されます。以降の `make status` /
 `make show` などはこの出力を参照するため、**必ず apply 完了後**に実行してください。
 
-## 4. 初期設定の完了を待つ
+> **2 フェーズ構成について**
+> 本テンプレートは初回ブートを軽く保つため、構築を2段階に分けています。
+> 1. **フェーズ1（`make deploy`）**: VPS を作成し、ユーザー作成・SSH 堅牢化のみ実施 → 高速に起動し SSH 疎通が確立する
+> 2. **フェーズ2（`make setup`）**: SSH 経由で WireGuard 等を導入・構成（進捗を画面で確認でき、失敗しても再実行可能）
+>
+> これにより「起動はしたが原因不明で入れない」状態を避け、切り分けが容易になります。
 
-VPS 作成後、cloud-init が裏でパッケージ導入と WireGuard 構成を行います
-（初回 3〜5 分）。
+## 4. SSH 疎通を確認（フェーズ1完了待ち）
+
+VPS 作成後、cloud-init が最小構成（ユーザー・SSH）を適用します（初回 1〜2 分）。
 
 ```bash
-make status    # 'cloud-init status --wait' を実行
+make status    # SSH 疎通を確認（鍵が既定外なら SSH_KEY=... を付与）
 ```
 
-`status: done` になれば完了です。ログは以下で確認できます。
+疎通したら次のフェーズへ。うまく入れない場合は
+[トラブルシューティング](#7-トラブルシューティング)を参照してください。
+
+## 5. ソフト導入・VPN 構成（フェーズ2）
 
 ```bash
-make ssh
-sudo cat /var/log/orenovpn-setup.log
+make setup     # スクリプトを転送し、サーバー上で構成を実行（出力が表示される）
 ```
 
-## 5. クライアントの接続
+パッケージ導入 → WireGuard 構成 → ファイアウォール → 初期クライアント作成までを
+実行し、**進捗が画面に表示されます**。途中で失敗しても、原因を直して
+`make setup` を再実行できます（冪等）。ログはサーバーの
+`/var/log/orenovpn-setup.log` にも残ります。
+
+## 6. クライアントの接続
 
 ### スマートフォン（QR コード）
 
 ```bash
-make show NAME=client1
+make show NAME=phone
 ```
 
 表示された QR コードを、スマホの [WireGuard アプリ](https://www.wireguard.com/install/)の
@@ -235,7 +248,7 @@ make clients                  # 一覧
 make remove NAME=my-laptop    # 削除
 ```
 
-## 6. トラブルシューティング
+## 7. トラブルシューティング
 
 | 症状 | 対処 |
 |------|------|
@@ -247,7 +260,7 @@ make remove NAME=my-laptop    # 削除
 | VPN 接続できるが通信できない | `make ssh` → `sudo wg show` でハンドシェイクを確認。`sudo cat /var/log/orenovpn-setup.log` でエラー確認 |
 | クライアント追加が反映されない | `sudo systemctl status wg-quick@wg0` を確認 |
 
-## 7. 撤去
+## 8. 撤去
 
 ```bash
 make destroy    # VPS・ボリューム・SG をすべて削除

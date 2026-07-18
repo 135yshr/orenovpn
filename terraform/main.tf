@@ -34,28 +34,10 @@ resource "openstack_blockstorage_volume_v3" "boot" {
   # ここに prevent_destroy を追加する。
 }
 
-# --- cloud-init（サーバー初期構成スクリプト）--------------------------------
+# --- cloud-init（フェーズ1・最小構成）--------------------------------------
+# スクリプトは埋め込まず、フェーズ2（make setup）で SSH 転送・実行する。
+# これにより user_data は小さく保たれ、初回ブートも高速・確実になる。
 locals {
-  # user_data は base64 化後 16KiB 未満に収める必要がある（ConoHa 制約）。
-  # 埋め込むスクリプトはコメント行・空行を除去して最小化する。リポジトリの
-  # 原本は完全なコメント付きのまま（デプロイされる版のみ最小化）。
-  # shebang(#!) と wg-client の機能マーカー(# BEGIN/END client) は保持する。
-  setup_script = join("\n", [
-    for l in split("\n", file("${path.module}/../scripts/setup.sh")) : l
-    if trimspace(l) != "" && (!startswith(trimspace(l), "#") || startswith(trimspace(l), "#!"))
-  ])
-  wg_client = join("\n", [
-    for l in split("\n", file("${path.module}/../scripts/wg-client")) : l
-    if trimspace(l) != "" && (
-      !startswith(trimspace(l), "#") ||
-      startswith(trimspace(l), "#!") ||
-      startswith(trimspace(l), "# BEGIN client") ||
-      startswith(trimspace(l), "# END client")
-    )
-  ])
-
-  # テンプレートに挿入される変数値は templatefile で再解釈されないため、
-  # スクリプト内の ${...} は安全。
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     admin_user          = var.admin_user
     ssh_public_key      = var.ssh_public_key
@@ -72,8 +54,6 @@ locals {
     wg_clients          = var.wg_clients
     enable_fail2ban     = var.enable_fail2ban
     enable_auto_updates = var.enable_auto_updates
-    setup_script        = local.setup_script
-    wg_client           = local.wg_client
   })
 }
 

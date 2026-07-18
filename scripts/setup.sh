@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
 #
-# orenovpn サーバー初期セットアップスクリプト
-#   cloud-init から一度だけ実行される。
-#   WireGuard サーバー構成・ファイアウォール・堅牢化を行う。
+# orenovpn サーバー構成スクリプト（フェーズ2）
+#   `make setup` が SSH 経由でサーバーに転送し sudo 実行する。
+#   パッケージ導入・WireGuard 構成・ファイアウォール・堅牢化を行う。
+#   何度でも再実行可能（冪等）。出力は端末に表示され、デバッグが容易。
 #
-# 設定値は /etc/orenovpn/orenovpn.env（Terraform が生成）から読み込む。
+# 設定値は /etc/orenovpn/orenovpn.env（cloud-init が生成）から読み込む。
 #
 set -euo pipefail
 
@@ -16,6 +17,20 @@ log() { echo "[orenovpn] $*"; }
 
 WG_IF=wg0
 WG_CONF="/etc/wireguard/${WG_IF}.conf"
+
+# -----------------------------------------------------------------------------
+# 0. 必要パッケージの導入（cloud-init では入れず、ここで導入して進捗を可視化）
+# -----------------------------------------------------------------------------
+export DEBIAN_FRONTEND=noninteractive
+log "パッケージ情報を更新中..."
+apt-get update -qq
+PKGS="wireguard wireguard-tools iptables ufw qrencode curl ca-certificates"
+[ "${ENABLE_FAIL2BAN}" = "true" ] && PKGS="$PKGS fail2ban"
+[ "${ENABLE_AUTO_UPDATES}" = "true" ] && PKGS="$PKGS unattended-upgrades apt-listchanges"
+log "パッケージを導入中: ${PKGS}"
+# shellcheck disable=SC2086
+apt-get install -y -qq $PKGS
+log "パッケージ導入完了"
 
 # -----------------------------------------------------------------------------
 # 1. WAN インターフェイスとパブリック IP を自動検出
@@ -76,9 +91,20 @@ EOF
 fi
 
 # -----------------------------------------------------------------------------
-# 4. カーネルパラメータ（IP 転送）を反映
-#    sysctl の値は cloud-init が /etc/sysctl.d/99-orenovpn.conf に配置済み。
+# 4. カーネルパラメータ（IP 転送 + 堅牢化）
 # -----------------------------------------------------------------------------
+cat > /etc/sysctl.d/99-orenovpn.conf <<'EOF'
+net.ipv4.ip_forward=1
+net.ipv6.conf.all.forwarding=1
+net.ipv4.conf.all.rp_filter=1
+net.ipv4.conf.all.accept_redirects=0
+net.ipv4.conf.all.send_redirects=0
+net.ipv4.conf.all.accept_source_route=0
+net.ipv4.conf.all.log_martians=1
+net.ipv6.conf.all.accept_redirects=0
+net.ipv4.tcp_syncookies=1
+kernel.kptr_restrict=2
+EOF
 sysctl --system >/dev/null
 
 # -----------------------------------------------------------------------------

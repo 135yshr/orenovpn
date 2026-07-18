@@ -1,12 +1,9 @@
 #cloud-config
 # =============================================================================
-# orenovpn サーバーブートストラップ（cloud-init）
-#   - 管理ユーザー作成 + SSH 鍵登録
-#   - SSH 堅牢化（鍵認証のみ・root/パスワード無効・ポート変更）
-#   - 必要パッケージ導入
-#   - WireGuard / ファイアウォール / 各種堅牢化は setup.sh が実施
-# 注意: このファイルは Terraform の templatefile で描画される。
-#       重いシェルスクリプトは base64 で埋め込み、シェル変数との衝突を回避する。
+# orenovpn サーバーブートストラップ（フェーズ1・最小限）
+#   目的: 高速・確実に起動し SSH 疎通を確立すること。
+#   ここでは重いパッケージ導入は行わない。WireGuard 等の導入・構成は
+#   フェーズ2（`make setup` が setup.sh を SSH 経由で実行）で行う。
 # =============================================================================
 timezone: ${timezone}
 ssh_pwauth: false
@@ -21,33 +18,14 @@ users:
     ssh_authorized_keys:
       - ${ssh_public_key}
 
-# 512MB でも確実に初回ブートするため swap を確保し、重い全更新は無効化
-# （セキュリティ更新は unattended-upgrades がブート後に自動適用）。
+# 512MB でも apt がメモリ不足で失敗しないよう swap を確保。
 swap:
   filename: /swapfile
   size: 2G
   maxsize: 2G
 
-package_update: true
-package_upgrade: false
-packages:
-  - wireguard
-  - wireguard-tools
-  - iptables
-  - ufw
-  - qrencode
-  - curl
-  - ca-certificates
-%{ if enable_fail2ban ~}
-  - fail2ban
-%{ endif ~}
-%{ if enable_auto_updates ~}
-  - unattended-upgrades
-  - apt-listchanges
-%{ endif ~}
-
 write_files:
-  # --- 設定値（Terraform が生成）------------------------------------------
+  # --- 設定値（Terraform が生成。フェーズ2の setup.sh が参照）--------------
   - path: /etc/orenovpn/orenovpn.env
     permissions: '0600'
     owner: root:root
@@ -65,7 +43,7 @@ write_files:
       ENABLE_FAIL2BAN="${enable_fail2ban}"
       ENABLE_AUTO_UPDATES="${enable_auto_updates}"
 
-  # --- SSH 堅牢化 -----------------------------------------------------------
+  # --- SSH 堅牢化（SG は ${ssh_port} のみ許可のため初回に必ず適用）--------
   - path: /etc/ssh/sshd_config.d/99-orenovpn.conf
     permissions: '0644'
     owner: root:root
@@ -80,40 +58,8 @@ write_files:
       MaxAuthTries 3
       AllowUsers ${admin_user}
 
-  # --- カーネルパラメータ（IP 転送 + 堅牢化）------------------------------
-  - path: /etc/sysctl.d/99-orenovpn.conf
-    permissions: '0644'
-    owner: root:root
-    content: |
-      net.ipv4.ip_forward=1
-      net.ipv6.conf.all.forwarding=1
-      net.ipv4.conf.all.rp_filter=1
-      net.ipv4.conf.all.accept_redirects=0
-      net.ipv4.conf.all.send_redirects=0
-      net.ipv4.conf.all.accept_source_route=0
-      net.ipv4.conf.all.log_martians=1
-      net.ipv6.conf.all.accept_redirects=0
-      net.ipv4.tcp_syncookies=1
-      kernel.kptr_restrict=2
-
-  # --- サーバーセットアップスクリプト -------------------------------------
-  - path: /usr/local/sbin/setup.sh
-    permissions: '0700'
-    owner: root:root
-    content: |
-      ${indent(6, setup_script)}
-
-  # --- クライアント管理スクリプト -----------------------------------------
-  - path: /usr/local/sbin/wg-client
-    permissions: '0755'
-    owner: root:root
-    content: |
-      ${indent(6, wg_client)}
-
 runcmd:
-  # 新しい SSH 設定を反映（以降は ${ssh_port} 番ポート・鍵認証のみ）
+  # 新しい SSH 設定を反映（以降は ${ssh_port} 番・鍵認証のみ）→ SSH 疎通確立
   - systemctl restart ssh || systemctl restart sshd
-  # WireGuard・ファイアウォール・堅牢化・初期クライアント作成を実行
-  - /usr/local/sbin/setup.sh 2>&1 | tee /var/log/orenovpn-setup.log
 
-final_message: "orenovpn: cloud-init 完了（$UPTIME 秒）。'cloud-init status' で確認できます。"
+final_message: "orenovpn phase1: cloud-init 完了。'make setup' で構成を続行してください。"

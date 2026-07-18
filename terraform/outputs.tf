@@ -32,21 +32,19 @@ output "next_steps" {
   value       = <<-EOT
 
     ┌────────────────────────────────────────────────────────────────┐
-    │  VPS を作成しました。cloud-init による初期設定が数分続きます。   │
+    │  VPS を作成しました（フェーズ1）。次に構成を実行してください。   │
     └────────────────────────────────────────────────────────────────┘
 
-    1) 初期設定の完了を待つ（初回のみ 3〜5 分程度）:
-         ssh -p ${var.ssh_port} ${var.admin_user}@${openstack_compute_instance_v2.this.access_ip_v4} \
-           'cloud-init status --wait'
+    1) SSH 疎通を確認（初回ブートは 1〜2 分程度）:
+         make status
 
-    2) 初期クライアントの設定/QR コードを取得:
-         ssh -p ${var.ssh_port} ${var.admin_user}@${openstack_compute_instance_v2.this.access_ip_v4} \
-           'sudo wg-client show ${length(var.wg_clients) > 0 ? var.wg_clients[0] : "client1"}'
+    2) ソフト導入・VPN 構成を実行（画面で進捗を確認）:
+         make setup
 
-    3) クライアントを追加:
-         ssh -p ${var.ssh_port} ${var.admin_user}@${openstack_compute_instance_v2.this.access_ip_v4} \
-           'sudo wg-client add my-phone'
+    3) クライアントの QR コードを表示:
+         make show NAME=${length(var.wg_clients) > 0 ? var.wg_clients[0] : "phone"}
 
-    Makefile を使う場合は `make status` / `make client NAME=my-phone` が便利です。
+    ※ SSH 鍵が既定パス以外なら各コマンドに SSH_KEY=... を付けてください。
+       例: make status SSH_KEY=~/.ssh/orenovpn
   EOT
 }
