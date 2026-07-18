@@ -79,11 +79,12 @@ URL="https://${SERVER_IP}:${PORT}/${URLTOKEN}.mobileconfig"
 set -e
 sudo ufw allow "${PORT}/tcp" >/dev/null 2>&1 || true
 command -v qrencode >/dev/null 2>&1 || sudo apt-get install -y -qq qrencode >/dev/null 2>&1 || true
-sudo rm -rf /tmp/orenovpn-serve; sudo mkdir -p /tmp/orenovpn-serve
+sudo rm -rf /tmp/orenovpn-serve; mkdir -p /tmp/orenovpn-serve
 SRC="/etc/orenovpn/clients/${NAME}.mobileconfig"
-[ -f "$SRC" ] || SRC="/etc/orenovpn/clients/${NAME}.conf"
-[ -f "$SRC" ] || { echo "クライアント ${NAME} が見つかりません"; exit 1; }
+sudo test -f "$SRC" || SRC="/etc/orenovpn/clients/${NAME}.conf"
+sudo test -f "$SRC" || { echo "クライアント ${NAME} が見つかりません（/etc/orenovpn/clients 配下）"; exit 1; }
 sudo cp "$SRC" "/tmp/orenovpn-serve/${URLTOKEN}.mobileconfig"
+sudo chmod 644 "/tmp/orenovpn-serve/${URLTOKEN}.mobileconfig"
 sudo openssl req -x509 -newkey rsa:2048 -nodes -keyout /tmp/orenovpn-serve/key.pem \
   -out /tmp/orenovpn-serve/cert.pem -days 1 -subj "/CN=${SERVER_IP}" >/dev/null 2>&1
 cat > /tmp/orenovpn-serve/serve.py <<PY
