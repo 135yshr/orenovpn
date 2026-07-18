@@ -19,11 +19,25 @@ SSH_KEY ?=
 # 実際に叩く ssh コマンド（SSH_KEY 指定時のみ -i を付与）
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)
 
-.PHONY: help init plan deploy apply status ssh client clients show remove destroy fmt validate images
+.PHONY: help preset init plan deploy apply status ssh client clients show remove destroy fmt validate images
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN{FS=":.*?## "}{printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
+
+preset: ## 設定プリセットを適用  例: make preset PRESET=balanced  (simple|balanced|hardened)
+	@case "$(PRESET)" in \
+	  simple)   f=presets/01-simple.tfvars ;; \
+	  balanced) f=presets/02-balanced.tfvars ;; \
+	  hardened) f=presets/03-hardened.tfvars ;; \
+	  *) echo "PRESET=simple|balanced|hardened のいずれかを指定してください"; exit 1 ;; \
+	esac; \
+	if [ -f terraform/terraform.tfvars ] && [ "$(FORCE)" != "1" ]; then \
+	  echo "terraform/terraform.tfvars は既に存在します。上書きするなら FORCE=1 を付けてください。"; exit 1; \
+	fi; \
+	cp "terraform/$$f" terraform/terraform.tfvars; \
+	echo "$$f を terraform/terraform.tfvars に適用しました。"; \
+	echo "→ 認証情報とSSH公開鍵を編集してください（②③は allowed_ssh_cidr も）。"
 
 images: ## 利用可能な OS イメージ名を確認   例: make images FILTER=debian
 	@./scripts/list-images.sh $(FILTER)
