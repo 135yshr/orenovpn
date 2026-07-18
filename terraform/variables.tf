@@ -100,11 +100,9 @@ variable "ssh_public_key" {
   type        = string
 }
 
-variable "ssh_port" {
-  description = "SSH の待ち受けポート。既定の 22 から変更してスキャンを回避。"
-  type        = number
-  default     = 22022
-}
+# SSH は 22 番固定（ポート変更は Debian の SSH ソケットアクティベーションで
+# 反映されず接続不能になり得るため、機能として持たない）。防御は鍵認証のみ＋
+# fail2ban（＋任意で接続元IP制限）が担う。
 
 variable "allowed_ssh_cidr" {
   description = <<-EOT

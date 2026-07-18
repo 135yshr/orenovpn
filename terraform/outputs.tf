@@ -9,12 +9,7 @@ output "server_ip" {
 
 output "ssh_command" {
   description = "サーバーへ SSH 接続するコマンド"
-  value       = "ssh -p ${var.ssh_port} ${var.admin_user}@${openstack_compute_instance_v2.this.access_ip_v4}"
-}
-
-output "ssh_port" {
-  description = "SSH ポート番号"
-  value       = var.ssh_port
+  value       = "ssh ${var.admin_user}@${openstack_compute_instance_v2.this.access_ip_v4}"
 }
 
 output "admin_user" {

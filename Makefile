@@ -8,7 +8,7 @@ TF := terraform -chdir=terraform
 # 接続情報は terraform の出力から取得（apply 完了後に有効になる）。
 # `=`（遅延展開）なので、apply 前の init/deploy では評価されない。
 SSH_HOST = $(shell $(TF) output -raw server_ip 2>/dev/null)
-SSH_PORT = $(shell $(TF) output -raw ssh_port 2>/dev/null)
+SSH_PORT = 22
 SSH_USER = $(shell $(TF) output -raw admin_user 2>/dev/null)
 
 # 任意: 既定パス(~/.ssh/id_ed25519 等)以外に秘密鍵を置いた場合に指定する。

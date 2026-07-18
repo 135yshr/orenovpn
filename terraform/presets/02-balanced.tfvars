@@ -28,9 +28,8 @@ image_name = "vmi-debian-13.5-amd64" # OS(Debian13)。make images で確認。De
 # VPN 方式: "wireguard"(専用アプリ) / "ikev2"(iPhone/macOS標準VPN・アプリ不要)
 vpn_protocol = "wireguard"
 
-# --- ④ SSH アクセス制御 -----------------------------------------------------
+# --- ④ SSH アクセス制御（SSHは22番固定）------------------------------------
 # admin_user = "vpnadmin"                 # 管理ユーザー名
-ssh_port = 40022 # 既定 22 を避けスキャンを軽減
 
 # 自分のグローバルIPを確認して置換:  curl -4 ifconfig.co
 #   固定IPあり → ["203.0.113.10/32"]（強く推奨） / IP可変 → ["0.0.0.0/0"]

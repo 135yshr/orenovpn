@@ -28,8 +28,8 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
 # timezone      = "Asia/Tokyo"
 
 # --- ④ SSH アクセス制御（任意・強く推奨）------------------------------------
+# SSH は 22 番固定（ポート変更機能なし）。防御は鍵認証＋fail2ban が担う。
 # admin_user = "vpnadmin"
-# ssh_port   = 22022                     # 既定ポート 22 を避けスキャンを軽減
 
 # 自宅/オフィスの固定 IP に絞ると安全性が大きく向上する。
 # 確認: `curl -4 ifconfig.co`

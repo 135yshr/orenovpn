@@ -41,7 +41,6 @@ locals {
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
     admin_user          = var.admin_user
     ssh_public_key      = var.ssh_public_key
-    ssh_port            = var.ssh_port
     timezone            = var.timezone
     wg_port             = var.wg_port
     wg_address_v4       = var.wg_address_v4

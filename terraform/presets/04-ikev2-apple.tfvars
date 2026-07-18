@@ -29,9 +29,8 @@ image_name = "vmi-debian-13.5-amd64" # OS(Debian13)。make images で確認。De
 # VPN 方式: iPhone/macOS 標準VPNでアプリ不要接続（.mobileconfig ワンタップ）
 vpn_protocol = "ikev2"
 
-# --- ④ SSH アクセス制御 -----------------------------------------------------
+# --- ④ SSH アクセス制御（SSHは22番固定）------------------------------------
 # admin_user       = "vpnadmin"           # 管理ユーザー名
-ssh_port = 40022 # 既定 22 を避けスキャンを軽減
 
 # 固定IPに絞ると安全（curl -4 ifconfig.co で確認）。IP可変環境は既定の全開放のまま。
 # allowed_ssh_cidr = ["203.0.113.10/32"]

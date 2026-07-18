@@ -29,9 +29,8 @@ image_name = "vmi-debian-13.5-amd64" # OS(Debian13)。make images で確認。De
 # VPN 方式: "wireguard"(専用アプリ) / "ikev2"(iPhone/macOS標準VPN・アプリ不要)
 vpn_protocol = "wireguard"
 
-# --- ④ SSH アクセス制御（厳格）---------------------------------------------
+# --- ④ SSH アクセス制御（厳格・SSHは22番固定）------------------------------
 admin_user = "vpnops" # 既定名 vpnadmin を避け推測を回避
-ssh_port   = 58022    # 高位の独自ポート
 
 # 【必須】管理用の固定IPのみ許可。curl -4 ifconfig.co で確認して置換。
 #   0.0.0.0/0 にすると本プリセットの意味が薄れる。

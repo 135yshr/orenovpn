@@ -151,7 +151,7 @@ Wi-Fi / モバイル通信への接続時に自動で VPN が張られます。
 make client NAME=macbook
 
 # サーバーから設定ファイルを取得（ポートは ssh_port に合わせる）
-scp -P 22022 vpnadmin@<サーバーIP>:/etc/orenovpn/clients/macbook.conf ./
+scp -P 22 vpnadmin@<サーバーIP>:/etc/orenovpn/clients/macbook.conf ./
 ```
 
 取得した `macbook.conf` を WireGuard アプリの

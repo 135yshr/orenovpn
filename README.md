@@ -117,7 +117,7 @@ make client NAME=my-laptop
 |------|--------|------|
 | `vpn_protocol` | `wireguard` | `wireguard`（専用アプリ）/ `ikev2`（iPhone/macOS標準VPN・アプリ不要）|
 | `flavor_name` | `g2l-t-c1m512` | プラン（最安 512MB）|
-| `ssh_port` | `22022` | SSH ポート |
+| `ssh_port` | `22` | SSH ポート（変更は非推奨: Debian13のSSH socketで反映されない場合あり）|
 | `allowed_ssh_cidr` | `["0.0.0.0/0"]` | SSH 許可元 IP（**固定 IP に絞ると安全**）|
 | `wg_port` | `51820` | WireGuard ポート |
 | `wg_dns` | `1.1.1.1,1.0.0.1` | クライアント DNS |

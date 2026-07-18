@@ -21,7 +21,7 @@
 | `PasswordAuthentication` | no | パスワード総当たりを封じる |
 | `PermitRootLogin` | no | root 直接ログインを禁止 |
 | `PubkeyAuthentication` | yes | 鍵認証のみ許可 |
-| `Port` | 22022（変更可）| 自動スキャンを軽減 |
+| `Port` | 22（固定）| ポート変更は非対応（Debianの SSH socket で反映されず接続不能になり得るため）|
 | `AllowUsers` | 管理ユーザーのみ | ログイン可能なユーザーを限定 |
 | `MaxAuthTries` | 3 | 試行回数を制限 |
 
