@@ -57,12 +57,15 @@ variable "flavor_name" {
 
 variable "image_name" {
   description = <<-EOT
-    OS イメージ名。`openstack image list` で正確な名称を確認すること。
-    例: vmi-debian-12.0-amd64 / vmi-ubuntu-24.04-amd64
-    cloud-init 対応の Debian/Ubuntu 系を推奨。
+    OS イメージ名。地域・時期で変わるため `openstack image list` で正確な名称を
+    必ず確認すること（データソースは完全一致で検索する）。
+    例: vmi-debian-13.0-amd64 / vmi-ubuntu-24.04-amd64
+    cloud-init + apt 前提のため Debian / Ubuntu 系のみ対応（RHEL系は不可）。
+    ※ 名称は vmi-debian-<メジャー>.0-amd64 形式。ポイントリリース(13.x)は
+      自動更新(unattended-upgrades)で追従するため .0 のままで問題ない。
   EOT
   type        = string
-  default     = "vmi-debian-12.0-amd64"
+  default     = "vmi-debian-13.0-amd64"
 }
 
 variable "volume_size" {

@@ -116,7 +116,7 @@ ssh_public_key     = "ssh-ed25519 AAAAC3Nza... orenovpn"
 [OpenStack CLI](https://doc.conoha.jp/reference/openstack-cli/) で正確な値を確認できます。
 
 ```bash
-openstack image list        # image_name（例: vmi-debian-12.0-amd64）
+openstack image list        # image_name（例: vmi-debian-13.0-amd64）
 openstack flavor list        # flavor_name（例: g2l-t-c1m512）
 openstack volume type list   # volume_type
 ```

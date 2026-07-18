@@ -24,7 +24,7 @@ SSH 堅牢化・WireGuard 起動・初期クライアント作成までを自動
 ## アーキテクチャ
 
 ```
-  あなたの端末                 ConoHa VPS (Debian 12)
+  あなたの端末                 ConoHa VPS (Debian 13)
  ┌───────────┐   WireGuard    ┌──────────────────────────┐
  │ WireGuard │◄══ UDP :51820 ═►│ wg0  10.66.66.1           │
  │  Client   │   (暗号化)      │  ├ ufw (最小許可)          │
@@ -39,7 +39,7 @@ SSH 堅牢化・WireGuard 起動・初期クライアント作成までを自動
 | プロビジョニング | Terraform（OpenStack Provider）|
 | サーバー初期構成 | cloud-init + シェルスクリプト |
 | VPN | WireGuard（Curve25519 / ChaCha20 + 事前共有鍵）|
-| OS | Debian 12（cloud-init 対応イメージ）|
+| OS | Debian 13（cloud-init 対応イメージ）|
 
 ---
 
