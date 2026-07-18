@@ -62,7 +62,11 @@ make profile NAME=iphone         # Mac のカレントディレクトリに ipho
 ```
 
 > `.mobileconfig` はサーバー上に root 所有で置かれるため、**iPhone から直接は取得できません**。
-> いったん **Mac にダウンロード**（`make profile`）してから iPhone へ渡します。
+> いったん **Mac（PC）にダウンロード**（`make profile`）してから iPhone へ渡します。
+>
+> 💡 「VPS で一時Webサーバーを立てて iPhone の Safari で直接DL」は **ConoHa では不可**でした。
+> ConoHa は稼働中インスタンスに**後から追加した SG ルールを反映しない**ため、配信用ポートを
+> オンデマンドで開けません（検証済み）。そのため下記の Mac 経由の受け渡しが確実です。
 
 ### 2. iPhone へ渡してインストール
 

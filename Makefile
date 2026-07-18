@@ -24,7 +24,7 @@ SSH_KEY ?= $(ORENOVPN_SSH_KEY)
 SSH = ssh -p $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),) $(SSH_USER)@$(SSH_HOST)
 SCP = scp -P $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),)
 
-.PHONY: help preset init plan deploy apply status setup ssh client clients show profile serve-profile remove destroy fmt validate images volume-types
+.PHONY: help preset init plan deploy apply status setup ssh client clients show profile remove destroy fmt validate images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -87,10 +87,6 @@ clients: ## クライアント一覧を表示
 show: ## 設定/QR/プロファイルを再表示   例: make show NAME=my-phone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make show NAME=my-phone"; exit 1)
 	@$(SSH) 'sudo vpn-client show $(NAME)'
-
-serve-profile: ## VPSから一時HTTPS+QRで配信(iPhoneのSafariで取得)  例: make serve-profile NAME=iphone
-	@test -n "$(NAME)" || (echo "NAME を指定してください: make serve-profile NAME=iphone"; exit 1)
-	@SSH_KEY="$(SSH_KEY)" ./scripts/serve-profile.sh "$(NAME)" "$(SSH_HOST)" "$(SSH_USER)"
 
 profile: ## 構成ファイルを手元にDL(iOSはAirDropで転送)  例: make profile NAME=iphone
 	@test -n "$(NAME)" || (echo "NAME を指定してください: make profile NAME=iphone"; exit 1)
