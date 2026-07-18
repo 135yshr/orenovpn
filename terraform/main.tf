@@ -66,6 +66,11 @@ resource "openstack_compute_instance_v2" "this" {
 
   user_data = local.cloud_init
 
+  # user_data を config-drive 経由で確実に配信する。
+  # ConoHa では metadata サービス経由の user_data が cloud-init に適用されない
+  # ことがあり、config-drive にすると #cloud-config が確実に処理される。
+  config_drive = true
+
   # ネームタグ（ConoHa コントロールパネルでの表示名）
   metadata = {
     instance_name_tag = var.instance_name

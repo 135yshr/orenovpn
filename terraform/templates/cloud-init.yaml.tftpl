@@ -7,7 +7,9 @@
 # =============================================================================
 timezone: ${timezone}
 ssh_pwauth: false
-disable_root: true
+# root は鍵ログインを残す（設定不備時のフォールバック。make setup 完了後に
+# 必要なら手動で無効化可）。swap は make setup 側で観察しながら作成する。
+disable_root: false
 
 users:
   - name: ${admin_user}
@@ -17,12 +19,6 @@ users:
     lock_passwd: true
     ssh_authorized_keys:
       - ${ssh_public_key}
-
-# 512MB でも apt がメモリ不足で失敗しないよう swap を確保。
-swap:
-  filename: /swapfile
-  size: 2G
-  maxsize: 2G
 
 write_files:
   # --- 設定値（Terraform が生成。フェーズ2の setup.sh が参照）--------------
@@ -44,19 +40,20 @@ write_files:
       ENABLE_FAIL2BAN="${enable_fail2ban}"
       ENABLE_AUTO_UPDATES="${enable_auto_updates}"
 
-  # --- SSH 堅牢化（ポートは 22 のまま。鍵認証のみ・root/パスワード無効）------
+  # --- SSH 堅牢化（ポート22固定・鍵認証のみ・パスワード無効）----------------
+  # root は prohibit-password（鍵ならOK）でフォールバックを残す。AllowUsers は
+  # 付けない（vpnops/root 両方を許可し、ロックアウトを避ける）。
   - path: /etc/ssh/sshd_config.d/99-orenovpn.conf
     permissions: '0644'
     owner: root:root
     content: |
-      PermitRootLogin no
+      PermitRootLogin prohibit-password
       PasswordAuthentication no
       KbdInteractiveAuthentication no
       ChallengeResponseAuthentication no
       PubkeyAuthentication yes
       X11Forwarding no
-      MaxAuthTries 3
-      AllowUsers ${admin_user}
+      MaxAuthTries 5
 
 runcmd:
   # SSH 堅牢化設定を反映（ポート変更はしないため socket の扱いは不要）

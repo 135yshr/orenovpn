@@ -32,6 +32,19 @@ if ! grep -q '^WG_WAN_IFACE=' "$ENV_FILE"; then
 fi
 
 # -----------------------------------------------------------------------------
+# 1.5 swap 確保（512MB プランで apt がメモリ不足で失敗しないように）
+# -----------------------------------------------------------------------------
+if [ ! -f /swapfile ] && ! swapon --show | grep -q '/swapfile'; then
+  log "swap(2G) を作成中..."
+  fallocate -l 2G /swapfile 2>/dev/null || dd if=/dev/zero of=/swapfile bs=1M count=2048 status=none
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+  grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+  log "swap 有効化"
+fi
+
+# -----------------------------------------------------------------------------
 # 2. パッケージ導入（プロトコル別）
 # -----------------------------------------------------------------------------
 export DEBIAN_FRONTEND=noninteractive
