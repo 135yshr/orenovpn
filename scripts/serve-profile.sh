@@ -53,14 +53,15 @@ SGID="$(curl -sS "$NEP/v2.0/security-groups?name=orenovpn-sg" -H "X-Auth-Token: 
 rm -f "$hdr" "$bdy"
 
 # --- ランダムなポート/トークン ---
-PORT=$(python3 -c "import secrets;print(secrets.randbelow(20000)+40000)")
+# 既定はランダム高位ポート。SERVE_PORT=443 等を指定するとキャリアの遮断を回避しやすい。
+PORT="${SERVE_PORT:-$(python3 -c "import secrets;print(secrets.randbelow(20000)+40000)")}"
 URLTOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
 RULE_ID=""
 
 cleanup() {
   echo; echo "[orenovpn] 後片付け中（ファイアウォールを閉じます）..."
   [ -n "$RULE_ID" ] && curl -sS -X DELETE "$NEP/v2.0/security-group-rules/$RULE_ID" -H "X-Auth-Token: $TOKEN" >/dev/null 2>&1 || true
-  "${SSH[@]}" "sudo ufw delete allow ${PORT}/tcp >/dev/null 2>&1; sudo rm -rf /tmp/orenovpn-serve" >/dev/null 2>&1 || true
+  "${SSH[@]}" "sudo pkill -f orenovpn-serve/serve.py >/dev/null 2>&1; sudo ufw delete allow ${PORT}/tcp >/dev/null 2>&1; sudo rm -rf /tmp/orenovpn-serve" >/dev/null 2>&1 || true
   echo "[orenovpn] 完了。ポート ${PORT} は閉じました。"
 }
 trap cleanup EXIT INT TERM
@@ -74,7 +75,7 @@ RULE_ID=$(curl -sS -X POST "$NEP/v2.0/security-group-rules" -H "X-Auth-Token: $T
 
 URL="https://${SERVER_IP}:${PORT}/${URLTOKEN}.mobileconfig"
 
-# --- VPS 側で HTTPS 一時配信 + QR 表示（DURATION 秒で自動終了）---
+# --- VPS 側で HTTPS 配信をデタッチ起動 + QR 表示（サーバーは timeout で自動停止）---
 "${SSH[@]}" "PORT='${PORT}' URLTOKEN='${URLTOKEN}' NAME='${NAME}' SERVER_IP='${SERVER_IP}' DURATION='${DURATION}' URL='${URL}' bash -s" <<'REMOTE'
 set -e
 sudo ufw allow "${PORT}/tcp" >/dev/null 2>&1 || true
@@ -100,14 +101,30 @@ ctx.load_cert_chain('/tmp/orenovpn-serve/cert.pem', '/tmp/orenovpn-serve/key.pem
 srv.socket = ctx.wrap_socket(srv.socket, server_side=True)
 srv.serve_forever()
 PY
+# デタッチ起動（timeout で自動停止。SSH セッション終了後も生存）
+sudo bash -c "nohup timeout ${DURATION} python3 /tmp/orenovpn-serve/serve.py >/tmp/orenovpn-serve/serve.log 2>&1 </dev/null &"
+sleep 1
 echo
 echo "==================== iPhone の Safari でスキャン ===================="
 qrencode -t ansiutf8 "${URL}" 2>/dev/null || echo "URL: ${URL}"
 echo "URL: ${URL}"
-echo "（自己署名のため『安全でない』警告が出ます →『詳細』→『このWebサイトにアクセスXX』で継続）"
-echo "有効時間: ${DURATION} 秒。取得後は Ctrl-C で即停止してください。"
+echo "（自己署名のため『安全でない』警告 →『詳細』→『このWebサイトにアクセス』で継続）"
 echo "===================================================================="
-sudo timeout "${DURATION}" python3 /tmp/orenovpn-serve/serve.py || true
-sudo ufw delete allow "${PORT}/tcp" >/dev/null 2>&1 || true
-sudo rm -rf /tmp/orenovpn-serve
 REMOTE
+
+# --- Mac 自身からの到達性テスト（SG が効いているかの切り分け）---
+echo "[orenovpn] インターネット経由の到達性を確認中..."
+sleep 3
+code=$(curl -k -sS -m 8 -o /dev/null -w '%{http_code}' "$URL" 2>/dev/null || echo "FAIL")
+if [ "$code" = "200" ]; then
+  echo "[orenovpn] ✅ Mac から到達OK（ポート ${PORT} は外部公開されています）"
+  echo "           → iPhone で繋がらない場合は、モバイル回線が高位ポートを遮断している可能性大。"
+  echo "             Wi-Fi に切り替えて試すか、SERVE_PORT=443 を指定して再実行してください。"
+else
+  echo "[orenovpn] ⚠️ Mac からも到達できません（code=${code}）。SG/ufw/経路の問題です。"
+  echo "           → この結果を貼ってください。SG 動的ルールの適用可否を調べます。"
+fi
+
+echo
+echo "有効 ${DURATION} 秒。iPhone で QR をスキャンしてください。Ctrl-C で即停止できます。"
+sleep "${DURATION}"
