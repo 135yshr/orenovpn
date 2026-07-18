@@ -64,6 +64,20 @@ resource "openstack_compute_instance_v2" "this" {
   key_pair        = openstack_compute_keypair_v2.this.name
   security_groups = [openstack_networking_secgroup_v2.vpn.name]
 
+  # 重要: 全 SG ルールの作成完了後にインスタンスを作る。
+  # ConoHa はポート作成時点の SG ルールのみを適用し、後から追加された
+  # ルールは稼働中インスタンスに反映しない。並行作成で一部ルールが
+  # 間に合わないと（例: 443）そのポートだけ不通になるため、明示依存で順序を固定する。
+  depends_on = [
+    openstack_networking_secgroup_rule_v2.ssh,
+    openstack_networking_secgroup_rule_v2.wireguard_v4,
+    openstack_networking_secgroup_rule_v2.wireguard_v6,
+    openstack_networking_secgroup_rule_v2.ikev2_v4,
+    openstack_networking_secgroup_rule_v2.ikev2_v6,
+    openstack_networking_secgroup_rule_v2.icmp_v4,
+    openstack_networking_secgroup_rule_v2.profile,
+  ]
+
   user_data = local.cloud_init
 
   # user_data を config-drive 経由で確実に配信する。
