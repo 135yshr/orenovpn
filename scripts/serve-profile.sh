@@ -103,7 +103,10 @@ srv.serve_forever()
 PY
 # デタッチ起動（timeout で自動停止。SSH セッション終了後も生存）
 sudo bash -c "nohup timeout ${DURATION} python3 /tmp/orenovpn-serve/serve.py >/tmp/orenovpn-serve/serve.log 2>&1 </dev/null &"
-sleep 1
+sleep 2
+echo "[diag] python 待受: $(sudo ss -tlnp 2>/dev/null | grep ":${PORT} " || echo '(待受なし)')"
+echo "[diag] ufw: $(sudo ufw status 2>/dev/null | grep "${PORT}" || echo '(ルールなし)')"
+echo "[diag] serve.log: $(sudo cat /tmp/orenovpn-serve/serve.log 2>/dev/null | tr '\n' ' ' | head -c 300)"
 echo
 echo "==================== iPhone の Safari でスキャン ===================="
 qrencode -t ansiutf8 "${URL}" 2>/dev/null || echo "URL: ${URL}"
