@@ -45,6 +45,16 @@ if [ ! -f /swapfile ] && ! swapon --show | grep -q '/swapfile'; then
 fi
 
 # -----------------------------------------------------------------------------
+# 1.7 Debian 既定 nftables を無効化（ufw と競合し 22 番以外を全ドロップするため）
+#     /etc/nftables.conf の "table inet filter"(input policy drop) が nftables.service
+#     で読み込まれ、ufw の許可ルールより優先して VPN ポート等を落としてしまう。
+#     ファイアウォールは ufw に一本化する（再起動後も復活しないよう service を無効化）。
+# -----------------------------------------------------------------------------
+systemctl disable --now nftables >/dev/null 2>&1 || true
+nft delete table inet filter >/dev/null 2>&1 || true
+log "Debian 既定 nftables を無効化（ufw に一本化）"
+
+# -----------------------------------------------------------------------------
 # 2. パッケージ導入（プロトコル別）
 # -----------------------------------------------------------------------------
 export DEBIAN_FRONTEND=noninteractive
