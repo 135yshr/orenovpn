@@ -64,7 +64,11 @@ resource "openstack_compute_instance_v2" "this" {
   flavor_id       = data.openstack_compute_flavor_v2.plan.id
   key_pair        = openstack_compute_keypair_v2.this.name
   security_groups = [openstack_networking_secgroup_v2.vpn.name]
-  user_data       = local.cloud_init
+
+  # cloud-init を gzip 圧縮して渡す（ConoHa の user_data 16KiB 制限対策）。
+  # cloud-init は gzip を自動解凍し、OpenStack プロバイダは base64 入力を
+  # デコードして送るため、圧縮済みバイトがそのまま cloud-init に届く。
+  user_data = base64gzip(local.cloud_init)
 
   # ネームタグ（ConoHa コントロールパネルでの表示名）
   metadata = {
