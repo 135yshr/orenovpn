@@ -16,6 +16,11 @@ conoha_password    = "CHANGE_ME"
 # 必須（ssh-keygen で作成した公開鍵 .pub の中身をそのまま貼る）
 ssh_public_key = "ssh-ed25519 AAAAC3Nza... CHANGE_ME"
 
+# ===== 使用する OS（明示）===================================================
+# Debian 13（現行安定版）。他OSにするなら `make images` で正確名を確認して変更。
+# 対応は Debian / Ubuntu 系のみ（例: "vmi-ubuntu-24.04-amd64"）。
+image_name = "vmi-debian-13.5-amd64"
+
 # ===== 接続する端末（よく変える）============================================
 # 端末ごとに名前を付ける。パソコンからも使うなら "laptop" などを追加:
 wg_clients = ["phone"] # 例: ["phone", "laptop", "tablet"]
@@ -27,7 +32,6 @@ wg_clients = ["phone"] # 例: ["phone", "laptop", "tablet"]
 # --- サーバー ---
 # instance_name = "orenovpn"             # ConoHa 上の表示名
 # flavor_name   = "g2l-t-c1m512"         # プラン（最安 512MB）
-# image_name    = "vmi-debian-13.5-amd64" # OS。`make images` で正確名を確認
 # volume_size   = 100                     # ブートボリューム(GB)。v3 は 100 単位
 # volume_type   = "c3j1-ds02"            # ボリュームタイプ
 # timezone      = "Asia/Tokyo"
