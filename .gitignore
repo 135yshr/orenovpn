@@ -37,3 +37,7 @@ orenovpn.local.mk
 .DS_Store
 *.swp
 *~
+
+# クライアント構成ファイル（秘密鍵を含む・取得物）
+*.mobileconfig
+*.download
