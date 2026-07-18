@@ -21,8 +21,15 @@ users:
     ssh_authorized_keys:
       - ${ssh_public_key}
 
+# 512MB でも確実に初回ブートするため swap を確保し、重い全更新は無効化
+# （セキュリティ更新は unattended-upgrades がブート後に自動適用）。
+swap:
+  filename: /swapfile
+  size: 2G
+  maxsize: 2G
+
 package_update: true
-package_upgrade: true
+package_upgrade: false
 packages:
   - wireguard
   - wireguard-tools
