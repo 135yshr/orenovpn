@@ -266,3 +266,72 @@ variable "enable_cert_revocation" {
   type        = bool
   default     = false
 }
+
+# -----------------------------------------------------------------------------
+# 通信監視・警告（トラフィック/SSH 失敗のメール通知）
+# -----------------------------------------------------------------------------
+variable "enable_traffic_alert" {
+  description = "通信監視・警告（トラフィック量や SSH 失敗回数のメール通知）を有効化"
+  type        = bool
+  default     = false
+}
+
+variable "alert_email" {
+  description = "警告メールの宛先アドレス"
+  type        = string
+  default     = ""
+}
+
+variable "smtp_host" {
+  description = "警告メール送信に使う SMTP サーバーのホスト名"
+  type        = string
+  default     = ""
+}
+
+variable "smtp_port" {
+  description = "SMTP サーバーのポート番号（既定は STARTTLS の 587）"
+  type        = number
+  default     = 587
+}
+
+variable "smtp_user" {
+  description = "SMTP 認証のユーザー名"
+  type        = string
+  default     = ""
+}
+
+variable "smtp_password" {
+  description = "SMTP 認証のパスワード。Terraform state と orenovpn.env に平文保存される点に注意"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "smtp_auth" {
+  description = "SMTP 認証を使うか（\"on\" | \"off\"）。自前 SMTP で IP 許可等により認証不要なら \"off\""
+  type        = string
+  default     = "on"
+
+  validation {
+    condition     = contains(["on", "off"], var.smtp_auth)
+    error_message = "smtp_auth は \"on\" か \"off\" を指定してください。"
+  }
+}
+
+variable "alert_ssh_fail_threshold" {
+  description = "警告を出す SSH 認証失敗回数のしきい値（集計期間内の回数）"
+  type        = number
+  default     = 20
+}
+
+variable "alert_traffic_mbytes" {
+  description = "警告を出す送信トラフィック量のしきい値（MB）"
+  type        = number
+  default     = 1024
+}
+
+variable "alert_blocklist_url" {
+  description = "参照する IP ブロックリストの URL（空なら無効）"
+  type        = string
+  default     = ""
+}

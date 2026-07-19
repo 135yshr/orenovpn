@@ -25,6 +25,7 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
 : "${SMTP_PORT:=587}"
 : "${SMTP_USER:=}"
 : "${SMTP_PASSWORD:=}"
+: "${SMTP_AUTH:=on}"
 : "${ALERT_BLOCKLIST_URL:=}"
 
 # 通信監視・警告の構成を関数化。通常フローの section 8 と `setup.sh alerts` の両方から呼ぶ。
@@ -36,23 +37,27 @@ if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
 
   # msmtp 送信設定（パスワードを含むため 0600 root:root）
   umask 077
-  cat >/etc/msmtprc <<EOF
-# orenovpn が生成。SMTP リレー設定（送信専用）。手動編集は make setup で上書きされます。
-defaults
-auth           on
-tls            on
-tls_starttls   on
-logfile        /var/log/msmtp.log
-
-account        orenovpn
-host           ${SMTP_HOST}
-port           ${SMTP_PORT}
-from           ${SMTP_USER}
-user           ${SMTP_USER}
-password       ${SMTP_PASSWORD}
-
-account default : orenovpn
-EOF
+  {
+    echo "# orenovpn が生成。SMTP リレー設定（送信専用）。手動編集は make setup で上書きされます。"
+    echo "defaults"
+    echo "tls            on"
+    echo "tls_starttls   on"
+    echo "logfile        /var/log/msmtp.log"
+    echo ""
+    echo "account        orenovpn"
+    echo "host           ${SMTP_HOST}"
+    echo "port           ${SMTP_PORT}"
+    echo "from           ${SMTP_USER:-$ALERT_EMAIL}"
+    if [ "${SMTP_AUTH}" = "off" ]; then
+      echo "auth           off"
+    else
+      echo "auth           on"
+      echo "user           ${SMTP_USER}"
+      echo "password       ${SMTP_PASSWORD}"
+    fi
+    echo ""
+    echo "account default : orenovpn"
+  } >/etc/msmtprc
   chmod 600 /etc/msmtprc
   chown root:root /etc/msmtprc
   umask 022

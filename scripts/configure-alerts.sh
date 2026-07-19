@@ -13,15 +13,36 @@ set -euo pipefail
 
 prompt() { local v; printf '%s' "$1" >&2; read -r v; printf '%s' "$v"; }
 
+printf '送信方式を選択してください:\n' >&2
+printf '  1) 外部 SMTP リレー（Gmail 等・ユーザー名/パスワード認証）\n' >&2
+printf '  2) 自前 SMTP サーバー（認証なし、または任意で認証）\n' >&2
+MODE="$(prompt '番号 [1]: ')"; MODE="${MODE:-1}"
+
 AE="$(prompt 'ALERT_EMAIL (通知先メール): ')"
 SMTPHOST="$(prompt 'SMTP_HOST: ')"
 SP="$(prompt 'SMTP_PORT [587]: ')"; SP="${SP:-587}"
-SU="$(prompt "SMTP_USER [${AE}]: ")"; SU="${SU:-$AE}"
-printf 'SMTP_PASSWORD: ' >&2
-stty -echo 2>/dev/null || true
-IFS= read -r PW
-stty echo 2>/dev/null || true
-printf '\n' >&2
+
+if [ "$MODE" = "2" ]; then
+  UA="$(prompt 'この SMTP は認証が必要ですか? [y/N]: ')"
+  case "$UA" in
+    [Yy]*) AUTH=on ;;
+    *)     AUTH=off ;;
+  esac
+else
+  AUTH=on
+fi
+if [ "$AUTH" = "on" ]; then
+  SU="$(prompt "SMTP_USER [${AE}]: ")"; SU="${SU:-$AE}"
+  printf 'SMTP_PASSWORD: ' >&2
+  stty -echo 2>/dev/null || true
+  IFS= read -r PW
+  stty echo 2>/dev/null || true
+  printf '\n' >&2
+else
+  SU=""
+  PW=""
+  printf '認証なしで設定します（自前 SMTP は STARTTLS 既定。平文のみの場合は後で /etc/msmtprc を調整）。\n' >&2
+fi
 BL="$(prompt 'ALERT_BLOCKLIST_URL (任意・空でスキップ): ')"
 
 # env ファイル（bash が source する）へ安全に書けるよう \ " ` $ をエスケープ
@@ -32,6 +53,7 @@ fragment="$(
   printf 'ALERT_EMAIL="%s"\n' "$(esc "$AE")"
   printf 'SMTP_HOST="%s"\n' "$(esc "$SMTPHOST")"
   printf 'SMTP_PORT="%s"\n' "$(esc "$SP")"
+  printf 'SMTP_AUTH="%s"\n' "$(esc "$AUTH")"
   printf 'SMTP_USER="%s"\n' "$(esc "$SU")"
   printf 'SMTP_PASSWORD="%s"\n' "$(esc "$PW")"
   printf 'ALERT_BLOCKLIST_URL="%s"\n' "$(esc "$BL")"
@@ -48,7 +70,7 @@ ENVF=/etc/orenovpn/orenovpn.env
 new="$(mktemp)"
 frag="$(mktemp)"
 cat > "$frag"
-grep -vE "^(ENABLE_TRAFFIC_ALERT|ALERT_EMAIL|SMTP_HOST|SMTP_PORT|SMTP_USER|SMTP_PASSWORD|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
+grep -vE "^(ENABLE_TRAFFIC_ALERT|ALERT_EMAIL|SMTP_HOST|SMTP_PORT|SMTP_AUTH|SMTP_USER|SMTP_PASSWORD|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
 cat "$frag" >> "$new"
 install -m 600 -o root -g root "$new" "$ENVF"
 rm -f "$new" "$frag"

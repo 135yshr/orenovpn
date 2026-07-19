@@ -123,6 +123,7 @@ sudo systemctl enable --now auditd
 
 有効化には `enable_traffic_alert = true` に加え、通知先の `alert_email` と
 SMTP 送信設定（`smtp_host` / `smtp_port` / `smtp_user` / `smtp_password`）が必要です。
+自前 SMTP サーバーを使う場合は `smtp_auth = "off"` で認証なし運用も可能です（その際 `smtp_user` / `smtp_password` は不要）。
 
 > ⚠️ **重要**: `smtp_password` は **Terraform state と `/etc/orenovpn/orenovpn.env`（0600）に
 > 平文で保存**されます。送信専用アカウントやアプリパスワードの利用を推奨します。

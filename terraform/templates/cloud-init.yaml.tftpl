@@ -40,6 +40,16 @@ write_files:
       ENABLE_FAIL2BAN="${enable_fail2ban}"
       ENABLE_AUTO_UPDATES="${enable_auto_updates}"
       ENABLE_CERT_REVOCATION="${enable_cert_revocation}"
+      ENABLE_TRAFFIC_ALERT="${enable_traffic_alert}"
+      ALERT_EMAIL="${alert_email}"
+      SMTP_HOST="${smtp_host}"
+      SMTP_PORT="${smtp_port}"
+      SMTP_USER="${smtp_user}"
+      SMTP_PASSWORD="${smtp_password}"
+      SMTP_AUTH="${smtp_auth}"
+      ALERT_SSH_FAIL_THRESHOLD="${alert_ssh_fail_threshold}"
+      ALERT_TRAFFIC_MBYTES="${alert_traffic_mbytes}"
+      ALERT_BLOCKLIST_URL="${alert_blocklist_url}"
 
   # --- SSH 堅牢化（ポート22固定・鍵認証のみ・パスワード無効）----------------
   # root は prohibit-password（鍵ならOK）でフォールバックを残す。AllowUsers は
