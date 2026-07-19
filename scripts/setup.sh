@@ -374,7 +374,14 @@ fi
 # -----------------------------------------------------------------------------
 if [ -n "${WG_INITIAL_CLIENTS:-}" ] && command -v vpn-client >/dev/null 2>&1; then
   for client in ${WG_INITIAL_CLIENTS}; do
-    vpn-client add "$client" --quiet || log "クライアント ${client} の作成に失敗"
+    # 再実行時に既存クライアントで「エラー」表示にならないよう、出力を捕捉して判定する。
+    if out="$(vpn-client add "$client" --quiet 2>&1)"; then
+      log "クライアント ${client} を作成"
+    elif printf '%s' "$out" | grep -q '既に存在'; then
+      log "クライアント ${client} は既存のためスキップ"
+    else
+      log "クライアント ${client} の作成に失敗: ${out}"
+    fi
   done
 fi
 
