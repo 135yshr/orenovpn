@@ -47,3 +47,10 @@ wg_clients = ["phone"] # 例: ["phone", "laptop", "tablet"]
 # --- QR配布/失効の詳細（任意）---
 # randomize_profile_port = true           # make serve-profile の配信ポートをランダム化
 # enable_cert_revocation = true           # IKEv2証明書の失効(CRL)を有効化（make remove で失効可能）
+
+# 通信監視・警告を使うなら（詳細は docs/ALERTING.md）:
+# enable_traffic_alert = true
+# alert_email          = "you@example.com"
+# smtp_host            = "smtp.gmail.com"
+# smtp_user            = "you@example.com"
+# smtp_password        = "CHANGE_ME_APP_PASSWORD"

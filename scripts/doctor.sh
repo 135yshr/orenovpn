@@ -71,5 +71,17 @@ elif [ "$PROTO" = "wireguard" ]; then
   echo "[INFO] 登録ピア数: ${peers:-0}"
 fi
 
+# 5. 通信監視・警告（ENABLE_TRAFFIC_ALERT=true のときのみ点検）
+ALERT="$(getenv ENABLE_TRAFFIC_ALERT)"
+if [ "$ALERT" = "true" ]; then
+  if $S systemctl is-active --quiet orenovpn-watch.timer 2>/dev/null; then pass "監視 timer(orenovpn-watch) 稼働中"; else bad "orenovpn-watch.timer が非稼働 → systemctl status orenovpn-watch.timer"; fi
+  if $S test -x /usr/local/sbin/orenovpn-watch; then pass "監視スクリプト配置あり"; else bad "/usr/local/sbin/orenovpn-watch が無い（make setup 再実行）"; fi
+  if $S test -f /etc/msmtprc; then pass "msmtp 設定あり"; else wrn "/etc/msmtprc が無い（メール通知不可）"; fi
+  last="$($S systemctl show -p ExecMainStatus --value orenovpn-watch.service 2>/dev/null || echo '')"
+  if [ -n "$last" ]; then echo "[INFO] 監視の直近実行ステータス: ${last}"; fi
+else
+  echo "[INFO] 通信監視は無効（ENABLE_TRAFFIC_ALERT!=true）"
+fi
+
 echo "== 結果: OK=${ok} WARN=${warn} FAIL=${fail} =="
 [ "$fail" -eq 0 ] || { echo "→ FAIL があります。上の指示に従って対処してください。"; exit 1; }

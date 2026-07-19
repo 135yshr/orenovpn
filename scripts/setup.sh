@@ -19,6 +19,12 @@ die() { echo "[orenovpn] エラー: $*" >&2; exit 1; }
 VPN_PROTOCOL="${VPN_PROTOCOL:-wireguard}"
 # 証明書失効(CRL)を有効化するか（IKEv2のみ）。未設定の既存インスタンスは false 扱い。
 ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
+: "${ENABLE_TRAFFIC_ALERT:=false}"
+: "${ALERT_EMAIL:=}"
+: "${SMTP_HOST:=}"
+: "${SMTP_PORT:=587}"
+: "${SMTP_USER:=}"
+: "${SMTP_PASSWORD:=}"
 
 # -----------------------------------------------------------------------------
 # 1. WAN インターフェイスとパブリック IP を検出し env に保存
@@ -71,6 +77,10 @@ case "$VPN_PROTOCOL" in
 esac
 [ "${ENABLE_FAIL2BAN}" = "true" ]     && PKGS="$PKGS fail2ban"
 [ "${ENABLE_AUTO_UPDATES}" = "true" ] && PKGS="$PKGS unattended-upgrades apt-listchanges"
+
+if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
+  PKGS="$PKGS msmtp"
+fi
 log "パッケージを導入中: ${PKGS}"
 # shellcheck disable=SC2086
 apt-get install -y -qq $PKGS
@@ -383,6 +393,76 @@ if [ -n "${WG_INITIAL_CLIENTS:-}" ] && command -v vpn-client >/dev/null 2>&1; th
       log "クライアント ${client} の作成に失敗: ${out}"
     fi
   done
+fi
+
+# ---- 8. 通信監視・警告（watch.sh + systemd timer）--------------------------
+# 怪しい通信（SSH 失敗急増・新規接続・トラフィック急増・悪性 IP 通信）を検知して
+# メール通知する。詳細は docs/ALERTING.md。監視本体は Makefile が
+# /usr/local/sbin/orenovpn-watch に install する。
+if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
+  if [ -z "${ALERT_EMAIL}" ] || [ -z "${SMTP_HOST}" ]; then
+    log "警告: ENABLE_TRAFFIC_ALERT=true だが ALERT_EMAIL/SMTP_HOST 未設定。通知は送られません"
+  fi
+
+  # msmtp 送信設定（パスワードを含むため 0600 root:root）
+  umask 077
+  cat >/etc/msmtprc <<EOF
+# orenovpn が生成。SMTP リレー設定（送信専用）。手動編集は make setup で上書きされます。
+defaults
+auth           on
+tls            on
+tls_starttls   on
+logfile        /var/log/msmtp.log
+
+account        orenovpn
+host           ${SMTP_HOST}
+port           ${SMTP_PORT}
+from           ${SMTP_USER}
+user           ${SMTP_USER}
+password       ${SMTP_PASSWORD}
+
+account default : orenovpn
+EOF
+  chmod 600 /etc/msmtprc
+  chown root:root /etc/msmtprc
+  umask 022
+
+  if [ ! -x /usr/local/sbin/orenovpn-watch ]; then
+    log "警告: /usr/local/sbin/orenovpn-watch が無い（make setup で転送されます）"
+  fi
+
+  cat >/etc/systemd/system/orenovpn-watch.service <<'EOF'
+[Unit]
+Description=orenovpn traffic anomaly watch
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/orenovpn-watch
+Nice=10
+EOF
+
+  cat >/etc/systemd/system/orenovpn-watch.timer <<'EOF'
+[Unit]
+Description=Run orenovpn-watch every 5 minutes
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*:0/5
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+  systemctl daemon-reload
+  systemctl enable --now orenovpn-watch.timer >/dev/null 2>&1 || true
+  log "通信監視を構成（orenovpn-watch.timer・5分毎）"
+else
+  if systemctl list-unit-files 2>/dev/null | grep -q orenovpn-watch.timer; then
+    systemctl disable --now orenovpn-watch.timer >/dev/null 2>&1 || true
+    log "通信監視を無効化（timer 停止）"
+  fi
 fi
 
 log "セットアップ完了 (${VPN_PROTOCOL})"

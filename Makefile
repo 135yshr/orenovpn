@@ -32,7 +32,7 @@ export NAME
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
-.PHONY: help preset init plan deploy apply status setup ssh doctor client clients show profile serve-profile remove destroy fmt validate check images volume-types
+.PHONY: help preset init plan deploy apply status setup ssh doctor alerts-test alerts-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -73,21 +73,29 @@ status: ## サーバーの初回ブート完了(SSH疎通)を待つ
 
 setup: ## ソフト導入・VPN構成を実行（deploy後・観察しながら）
 	@echo "スクリプトを転送中..."
-	@$(SCP) scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client $(SSH_USER)@$(SSH_HOST):/tmp/
+	@$(SCP) scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh $(SSH_USER)@$(SSH_HOST):/tmp/
 	@echo "サーバー上で構成を実行します（出力を確認してください）..."
 	@$(SSH) 'bash -o pipefail -c "\
 	         sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && \
 	         sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && \
 	         sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && \
+	         sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && \
 	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
 	         sudo /usr/local/sbin/setup.sh 2>&1 | sudo tee /var/log/orenovpn-setup.log && \
-	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client"'
+	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh"'
 
 ssh: ## サーバーへ SSH 接続
 	@$(SSH)
 
 doctor: ## サーバー構成を自己診断（不通/通信不可の原因切り分け）
 	@$(SSH) 'bash -s' < scripts/doctor.sh
+
+alerts-test: ## 通信監視のテストメールを送信（設定確認用）
+	@echo "テストメールを送信します（ALERT_EMAIL 宛て）..."
+	@$(SSH) 'sudo orenovpn-watch test'
+
+alerts-status: ## 通信監視 timer の状態と直近ログを表示
+	@$(SSH) 'systemctl status orenovpn-watch.timer --no-pager || true; echo; journalctl -u orenovpn-watch --no-pager -n 20 || true'
 
 client: ## クライアントを追加   例: make client NAME=my-phone
 	@$(NAMECHECK)

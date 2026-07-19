@@ -51,6 +51,18 @@ enable_auto_updates = true # 自動セキュリティ更新
 # randomize_profile_port = true # make serve-profile の配信ポートをランダム化
 # enable_cert_revocation = true # IKEv2証明書の失効(CRL)を有効化（make remove で失効可能）
 
+# --- ⑦ 通信監視・警告（怪しい通信をメール通知）------------------------------
+# 詳細は docs/ALERTING.md。smtp_password は state / orenovpn.env に平文保存される点に注意。
+enable_traffic_alert = true
+alert_email          = "you@example.com"
+smtp_host            = "smtp.gmail.com"
+smtp_port            = 587
+smtp_user            = "you@example.com"
+smtp_password        = "CHANGE_ME_APP_PASSWORD"
+# alert_ssh_fail_threshold = 20
+# alert_traffic_mbytes     = 1024
+# alert_blocklist_url      = ""
+
 # =============================================================================
 # デプロイ後に追加で実施（docs/SECURITY.md 参照）:
 #   □ クライアント側の kill switch を有効化（VPN切断時の漏洩防止）
