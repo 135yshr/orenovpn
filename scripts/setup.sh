@@ -172,10 +172,15 @@ setup_ikev2() {
   # IPv6 リーク対策: v6 有効時のみ ::/0 を提示し、v6 内部アドレスも配布する。
   # （v6 を提示するだけで配布しないと、端末のネイティブ v6 がトンネル外へ漏れる。
   #   逆に v6 無効時は ::/0 を一切提示しない＝端末に v6 経路を作らせない。）
-  local LOCAL_TS="0.0.0.0/0" POOL_ADDRS="${WG_SUBNET_V4}"
+  local LOCAL_TS="0.0.0.0/0" POOL_REF="orenovpn_pool" POOL6_BLOCK=""
   if [ "${WG_ENABLE_IPV6}" = "true" ]; then
     LOCAL_TS="0.0.0.0/0, ::/0"
-    POOL_ADDRS="${WG_SUBNET_V4}, ${WG_SUBNET_V6}"
+    POOL_REF="orenovpn_pool, orenovpn_pool6"
+    # v4/v6 は別プールに分ける（swanctl の pool.addrs は 1 プール 1 アドレス族が確実。
+    #  混在指定だと片方しか読み込まれず "no virtual IP found for %any6" になる）。
+    POOL6_BLOCK="  orenovpn_pool6 {
+    addrs = ${WG_SUBNET_V6}
+  }"
   fi
   cat > /etc/swanctl/swanctl.conf <<EOF
 connections {
@@ -188,7 +193,7 @@ connections {
     # 全クライアントで UDP カプセル化(4500)を強制。非NATクライアントでも
     # ネイティブ ESP(IP proto 50) を必要とせず、UDP 500/4500 のみで通る。
     encap = yes
-    pools = orenovpn_pool
+    pools = ${POOL_REF}
     local {
       auth = pubkey
       certs = server.pem
@@ -212,14 +217,34 @@ connections {
 }
 pools {
   orenovpn_pool {
-    addrs = ${POOL_ADDRS}
+    addrs = ${WG_SUBNET_V4}
     dns = ${DNS_SW}
   }
+${POOL6_BLOCK}
 }
 EOF
   chmod 600 /etc/swanctl/swanctl.conf
 
-  # --- NAT（VPN サブネット → WAN）。ufw の before.rules に冪等に追記
+  # NAT は ufw リセット後に適用する（apply_ikev2_nat を「5.ファイアウォール」で呼ぶ）。
+  # ここで before.rules に書いても後段の `ufw --force reset` で消えてしまうため。
+
+  # swanctl ベースのサービスを起動（Debian のパッケージ差異に備えて候補を順に試行）
+  # 失敗を成功扱いにしない: 起動もロードもできなければ die して make setup を失敗させる。
+  local started=""
+  for svc in strongswan.service strongswan-swanctl.service strongswan; do
+    if systemctl enable --now "$svc" >/dev/null 2>&1; then started="$svc"; break; fi
+  done
+  [ -n "$started" ] || die "strongSwan サービスを起動できませんでした（systemctl status strongswan を確認）"
+  systemctl restart "$started"
+  swanctl --load-all || die "swanctl --load-all に失敗しました（swanctl.conf/証明書を確認）"
+  systemctl is-active --quiet "$started" || die "strongSwan が active になりません（journalctl -u strongswan を確認）"
+  log "IKEv2/IPsec (strongSwan) 構成完了 サービス=${started}"
+}
+
+# IKEv2 の NAT(MASQUERADE)＋転送許可を ufw に適用する。ufw のリセット後に呼ぶこと
+# （before.rules は `ufw --force reset` でデフォルトへ戻るため、リセット前に書くと消える）。
+apply_ikev2_nat() {
+  # IPv4: VPN サブネット → WAN を MASQUERADE
   if ! grep -q 'orenovpn-nat' /etc/ufw/before.rules; then
     local tmp; tmp="$(mktemp)"
     {
@@ -233,8 +258,8 @@ EOF
     } > "$tmp"
     mv "$tmp" /etc/ufw/before.rules
   fi
-  # v6 有効時は before6.rules にも NAT66(MASQUERADE) を追記。トンネル内 v6 を
-  # サーバーの v6 経由で送出する（v6 出口が無ければ破棄＝トンネル外へ漏れない）。
+  # IPv6: v6 有効時は before6.rules にも NAT66。トンネル内 v6 をサーバーの v6 経由で
+  # 送出（v6 出口が無ければ破棄＝トンネル外へ漏れない）。
   if [ "${WG_ENABLE_IPV6}" = "true" ] && ! grep -q 'orenovpn-nat' /etc/ufw/before6.rules 2>/dev/null; then
     local tmp6; tmp6="$(mktemp)"
     {
@@ -249,18 +274,6 @@ EOF
     mv "$tmp6" /etc/ufw/before6.rules
   fi
   sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
-
-  # swanctl ベースのサービスを起動（Debian のパッケージ差異に備えて候補を順に試行）
-  # 失敗を成功扱いにしない: 起動もロードもできなければ die して make setup を失敗させる。
-  local started=""
-  for svc in strongswan.service strongswan-swanctl.service strongswan; do
-    if systemctl enable --now "$svc" >/dev/null 2>&1; then started="$svc"; break; fi
-  done
-  [ -n "$started" ] || die "strongSwan サービスを起動できませんでした（systemctl status strongswan を確認）"
-  systemctl restart "$started"
-  swanctl --load-all || die "swanctl --load-all に失敗しました（swanctl.conf/証明書を確認）"
-  systemctl is-active --quiet "$started" || die "strongSwan が active になりません（journalctl -u strongswan を確認）"
-  log "IKEv2/IPsec (strongSwan) 構成完了 サービス=${started}"
 }
 
 case "$VPN_PROTOCOL" in
@@ -279,10 +292,12 @@ case "$VPN_PROTOCOL" in
   wireguard) ufw allow "${WG_PORT}/udp" comment 'WireGuard' ;;
   ikev2)     ufw allow 500/udp comment 'IKEv2'; ufw allow 4500/udp comment 'IKEv2 NAT-T' ;;
 esac
+# NAT/転送許可は reset 後・enable 前に適用（reset で消えないように）
+[ "$VPN_PROTOCOL" = "ikev2" ] && apply_ikev2_nat
 ufw --force enable
 log "ufw を有効化"
 
-# NAT を反映するため ufw をリロード（ikev2 の before.rules 反映）
+# before.rules の NAT を確実に反映
 [ "$VPN_PROTOCOL" = "ikev2" ] && ufw reload >/dev/null 2>&1 || true
 
 # -----------------------------------------------------------------------------
