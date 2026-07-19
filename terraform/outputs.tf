@@ -41,7 +41,7 @@ output "next_steps" {
     2) ソフト導入・VPN 構成を実行（画面で進捗を確認）:
          make setup
 
-    3) クライアントの QR コードを表示:
+    3) クライアント設定を表示（WireGuard=QR / IKEv2=プロファイル案内）:
          make show NAME=${length(var.wg_clients) > 0 ? var.wg_clients[0] : "phone"}
 
     ※ SSH 鍵が既定パス以外なら各コマンドに SSH_KEY=... を付けてください。

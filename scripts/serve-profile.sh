@@ -22,6 +22,8 @@ PORT="${SERVE_PORT:-443}"
 
 die(){ echo "エラー: $*" >&2; exit 1; }
 [ -n "$NAME" ] && [ -n "$SERVER_IP" ] && [ -n "$SSH_USER" ] || die "引数不足（NAME SERVER_IP SSH_USER）"
+# NAME はリモートのコマンド/パスに埋め込むため、英数字・ハイフン・アンダースコアのみ許可。
+[[ "$NAME" =~ ^[A-Za-z0-9_-]+$ ]] || die "NAME は英数字・ハイフン・アンダースコアのみ使用できます"
 command -v curl >/dev/null && command -v python3 >/dev/null || die "curl と python3 が必要です"
 
 SSH_KEY="${SSH_KEY:-}"; SSH_KEY="${SSH_KEY/#\~/$HOME}"
@@ -33,6 +35,8 @@ URLTOKEN=$(python3 -c "import secrets;print(secrets.token_hex(16))")
 URL="https://${SERVER_IP}:${PORT}/${URLTOKEN}.mobileconfig"
 
 cleanup() {
+  # INT/TERM で発火した後に EXIT でも再発火して二重実行になるのを防ぐ。
+  trap - EXIT INT TERM
   echo; echo "[orenovpn] 後片付け中（ufw を閉じ、配信を停止）..."
   "${SSH[@]}" "sudo pkill -f orenovpn-serve/serve.py >/dev/null 2>&1; sudo ufw delete allow ${PORT}/tcp >/dev/null 2>&1; sudo rm -rf /tmp/orenovpn-serve" >/dev/null 2>&1 || true
   echo "[orenovpn] 完了。"

@@ -14,6 +14,7 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 source "$ENV_FILE"
 
 log() { echo "[orenovpn] $*"; }
+die() { echo "[orenovpn] エラー: $*" >&2; exit 1; }
 
 VPN_PROTOCOL="${VPN_PROTOCOL:-wireguard}"
 
@@ -174,6 +175,9 @@ connections {
     version = 2
     proposals = aes256-sha256-modp2048,aes256gcm16-prfsha384-ecp384
     rekey_time = 0
+    # 全クライアントで UDP カプセル化(4500)を強制。非NATクライアントでも
+    # ネイティブ ESP(IP proto 50) を必要とせず、UDP 500/4500 のみで通る。
+    encap = yes
     pools = orenovpn_pool
     local {
       auth = pubkey
@@ -220,14 +224,16 @@ EOF
   sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 
   # swanctl ベースのサービスを起動（Debian のパッケージ差異に備えて候補を順に試行）
+  # 失敗を成功扱いにしない: 起動もロードもできなければ die して make setup を失敗させる。
   local started=""
   for svc in strongswan.service strongswan-swanctl.service strongswan; do
     if systemctl enable --now "$svc" >/dev/null 2>&1; then started="$svc"; break; fi
   done
-  [ -n "$started" ] || log "警告: strongSwan サービスを自動起動できませんでした（手動確認が必要）"
-  systemctl restart "${started:-strongswan}" 2>/dev/null || true
-  swanctl --load-all 2>&1 || log "警告: swanctl --load-all に失敗（サービス状態を確認してください）"
-  log "IKEv2/IPsec (strongSwan) 構成完了 サービス=${started:-unknown}"
+  [ -n "$started" ] || die "strongSwan サービスを起動できませんでした（systemctl status strongswan を確認）"
+  systemctl restart "$started"
+  swanctl --load-all || die "swanctl --load-all に失敗しました（swanctl.conf/証明書を確認）"
+  systemctl is-active --quiet "$started" || die "strongSwan が active になりません（journalctl -u strongswan を確認）"
+  log "IKEv2/IPsec (strongSwan) 構成完了 サービス=${started}"
 }
 
 case "$VPN_PROTOCOL" in

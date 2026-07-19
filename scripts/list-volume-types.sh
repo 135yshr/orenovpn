@@ -19,9 +19,16 @@ command -v python3 >/dev/null || die "python3 が必要です"
 
 getvar() {
   [ -f "$TFVARS" ] || return 0
+  local line
   # キーが無い場合 grep が非ゼロ終了して set -e で落ちるのを防ぐため || true
-  { grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1 \
-    | sed -E 's/^[^=]*=[[:space:]]*"?([^"#]*[^"# ])"?.*$/\1/'; } || true
+  line="$(grep -E "^[[:space:]]*$1[[:space:]]*=" "$TFVARS" 2>/dev/null | head -1)" || true
+  [ -n "$line" ] || return 0
+  case "$line" in
+    # 値がダブルクォートで囲まれていれば中身をそのまま取り出す（# を含む値も欠けない）
+    *\"*\"*) printf '%s' "$line" | sed -E 's/^[^"]*"([^"]*)".*$/\1/' ;;
+    # 非クォート値は行末コメントと空白を除去
+    *)       printf '%s' "$line" | sed -E 's/^[^=]*=[[:space:]]*([^#[:space:]]*).*$/\1/' ;;
+  esac
 }
 
 AUTH_URL="${OS_AUTH_URL:-$(getvar conoha_auth_url)}"
@@ -38,9 +45,10 @@ PASSWORD="${OS_PASSWORD:-$(getvar conoha_password)}"
 hdrs="$(mktemp)"; body="$(mktemp)"
 trap 'rm -f "$hdrs" "$body"' EXIT
 
-payload=$(python3 - "$USERNAME" "$DOMAIN" "$PASSWORD" "$TENANT" <<'PY'
-import json, sys
-u, d, p, t = sys.argv[1:5]
+# 認証情報は argv（ps で見える）ではなく環境変数で python に渡す。
+payload=$(OVPN_U="$USERNAME" OVPN_D="$DOMAIN" OVPN_P="$PASSWORD" OVPN_T="$TENANT" python3 - <<'PY'
+import json, os
+u, d, p, t = os.environ["OVPN_U"], os.environ["OVPN_D"], os.environ["OVPN_P"], os.environ["OVPN_T"]
 print(json.dumps({"auth": {
   "identity": {"methods": ["password"],
     "password": {"user": {"name": u, "domain": {"name": d}, "password": p}}},
@@ -48,8 +56,9 @@ print(json.dumps({"auth": {
 PY
 )
 
-curl -sS -X POST "${AUTH_URL%/}/auth/tokens" \
-  -H "Content-Type: application/json" -d "$payload" \
+# payload（パスワードを含む）は argv ではなく stdin から渡す。
+printf '%s' "$payload" | curl -sS -X POST "${AUTH_URL%/}/auth/tokens" \
+  -H "Content-Type: application/json" --data-binary @- \
   -D "$hdrs" -o "$body" || die "認証リクエストに失敗しました"
 
 TOKEN="$(awk 'tolower($1)=="x-subject-token:"{print $2}' "$hdrs" | tr -d '\r\n')"
