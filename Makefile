@@ -32,7 +32,7 @@ export NAME
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
-.PHONY: help preset init plan deploy apply status setup ssh doctor client clients show profile serve-profile remove destroy fmt validate images volume-types
+.PHONY: help preset init plan deploy apply status setup ssh doctor client clients show profile serve-profile remove destroy fmt validate check images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -124,3 +124,15 @@ fmt: ## Terraform コードを整形
 
 validate: ## Terraform コードを検証
 	$(TF) validate
+
+check: ## デプロイ前のローカル一括検証（fmt/validate/構文/shellcheck）
+	@echo "==> terraform fmt -check"
+	@$(TF) fmt -check -recursive
+	@echo "==> terraform validate"
+	@$(TF) validate
+	@echo "==> bash -n（全スクリプト構文）"
+	@for f in scripts/*; do bash -n "$$f" || exit 1; done; echo "  scripts OK"
+	@if command -v shellcheck >/dev/null 2>&1; then \
+	  echo "==> shellcheck"; shellcheck -S warning scripts/*; \
+	else echo "==> shellcheck（未導入・スキップ）"; fi
+	@echo "✅ すべての検証を通過しました"

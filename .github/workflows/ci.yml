@@ -1,0 +1,38 @@
+name: CI
+
+# push（main）と全 PR で自動検証。壊れた変更が main に入るのを防ぐ安全ネット。
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: lint & validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ShellCheck は ubuntu-latest にプリインストール済み
+      - name: ShellCheck (scripts)
+        run: shellcheck -S warning scripts/*
+
+      - name: Bash syntax (bash -n)
+        run: for f in scripts/*; do bash -n "$f"; done
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Terraform fmt (check)
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      - name: Terraform init & validate
+        run: |
+          terraform -chdir=terraform init -backend=false -input=false
+          terraform -chdir=terraform validate
