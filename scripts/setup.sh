@@ -296,9 +296,8 @@ esac
 [ "$VPN_PROTOCOL" = "ikev2" ] && apply_ikev2_nat
 ufw --force enable
 log "ufw を有効化"
-
-# before.rules の NAT を確実に反映
-[ "$VPN_PROTOCOL" = "ikev2" ] && ufw reload >/dev/null 2>&1 || true
+# NAT は enable 前に before.rules へ適用済みのため、ここでの reload は不要
+# （reload すると同一 MASQUERADE ルールが二重登録される）。
 
 # -----------------------------------------------------------------------------
 # 6. fail2ban / 自動更新（共通）
