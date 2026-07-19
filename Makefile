@@ -99,7 +99,7 @@ show: ## 設定/QR/プロファイルを再表示   例: make show NAME=my-phone
 
 serve-profile: ## VPSから一時HTTPS+QRで配信(iPhoneのSafariで取得)  例: make serve-profile NAME=iphone
 	@$(NAMECHECK)
-	@SSH_KEY="$(SSH_KEY)" SERVE_PORT="$$($(TF) output -raw profile_port 2>/dev/null)" ./scripts/serve-profile.sh "$$NAME" "$(SSH_HOST)" "$(SSH_USER)"
+	@SSH_KEY="$(SSH_KEY)" SERVE_PORT="$$($(TF) output -raw profile_port 2>/dev/null)" PROFILE_DOMAIN="$(PROFILE_DOMAIN)" ./scripts/serve-profile.sh "$$NAME" "$(SSH_HOST)" "$(SSH_USER)"
 
 profile: ## 構成ファイルを手元にDL(iOSはAirDropで転送)  例: make profile NAME=iphone
 	@$(NAMECHECK)

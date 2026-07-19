@@ -216,9 +216,22 @@ variable "profile_port" {
   description = <<-EOT
     構成ファイル配信用の HTTPS ポート。ConoHa 定義済み SG "IPv4v6-Web" が開くのは
     80/443 のため既定は 443。iPhone はカメラで QR を読むだけなので回線制限も受けにくい。
+    randomize_profile_port=true の場合はこの値は無視され、apply 時にランダム決定される。
+    443/80 以外の固定ポートを指定した場合は自動でカスタム SG ルールを作成する。
   EOT
   type        = number
   default     = 443
+}
+
+variable "randomize_profile_port" {
+  description = <<-EOT
+    配信ポートを apply 時にランダム（20000〜60000）で決定する。デプロイ単位で固定され、
+    再 apply では変わらない（destroy→再作成で新しい値になる）。true の場合、その
+    ポートを開くカスタム SG ルールを自動作成する（LE 証明書取得用の 80 は IPv4v6-Web
+    が担保）。既知ポートを避けたい場合に有効。※配信の安全性は主に URL トークンで担保。
+  EOT
+  type        = bool
+  default     = false
 }
 
 # -----------------------------------------------------------------------------

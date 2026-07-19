@@ -18,8 +18,8 @@ output "admin_user" {
 }
 
 output "profile_port" {
-  description = "構成ファイル配信ポート（make serve-profile 用）"
-  value       = var.profile_port
+  description = "構成ファイル配信ポート（make serve-profile 用）。randomize 時は apply で決まった値。"
+  value       = local.profile_port
 }
 
 output "wireguard_endpoint" {

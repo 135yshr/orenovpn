@@ -78,6 +78,8 @@ resource "openstack_compute_instance_v2" "this" {
     openstack_networking_secgroup_rule_v2.ikev2_v4,
     openstack_networking_secgroup_rule_v2.ikev2_v6,
     openstack_networking_secgroup_rule_v2.icmp_v4,
+    openstack_networking_secgroup_rule_v2.profile_v4,
+    openstack_networking_secgroup_rule_v2.profile_v6,
   ]
 
   user_data = local.cloud_init
