@@ -51,10 +51,29 @@ smtp_user            = "you@example.com"
 smtp_password        = "アプリパスワード"
 ```
 
+## 既存サーバーへの反映（make configure-alerts）
+
+上記 `terraform.tfvars` の設定が env（`/etc/orenovpn/orenovpn.env`）に入るのは、**新規デプロイ時**に
+cloud-init が env を生成するタイミングだけ。稼働中の既存サーバーでは cloud-init は env を再生成
+しないため、tfvars を後から編集しても反映されない（`main.tf` は `ignore_changes = [user_data]`）。
+
+既存サーバーへ後からアラート設定を入れる／変更するときは次を実行する:
+
+```bash
+make configure-alerts
+```
+
+対話で `ALERT_EMAIL` / `SMTP_HOST` / `SMTP_PORT` / `SMTP_USER` / `SMTP_PASSWORD` /
+`ALERT_BLOCKLIST_URL` を入力すると、SSH でサーバーの env の該当キーだけを更新し、`setup.sh` の
+`alerts` モードで監視を冪等に再構成する。**SMTP パスワードは Terraform state に残らず**、入力値は
+データとしてサーバーへ渡す（シェルへ展開しないためインジェクションも回避）。反映後は
+`make alerts-test` で送信を確認できる。
+
 ## 運用コマンド
 
 | コマンド | 内容 |
 |----------|------|
+| `make configure-alerts` | 既存サーバーへアラート設定を反映（対話入力・state に残さない） |
 | `make alerts-test` | テスト通知メールを送信して SMTP 設定を確認 |
 | `make alerts-status` | 監視 timer の稼働状況と直近ログを表示 |
 | `make doctor` | 監視 timer・スクリプト・msmtp 設定の点検を含む自己診断 |

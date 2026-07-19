@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+#
+# configure-alerts.sh : 既存サーバーにアラート設定を反映する（make configure-alerts）。
+#   クライアント側で対話入力し、SSH でサーバーの /etc/orenovpn/orenovpn.env を
+#   更新後、setup.sh の alerts モードで監視を冪等に再構成する。
+#   SMTP パスワードは Terraform state に残らず、値はデータとしてサーバーへ渡す
+#   （シェルへ展開しないためインジェクションも回避。特殊文字はエスケープ）。
+#   make 経由で ORENOVPN_SSH に SSH コマンドを受け取って実行される。
+#
+set -euo pipefail
+
+: "${ORENOVPN_SSH:?make configure-alerts 経由で実行してください（ORENOVPN_SSH 未設定）}"
+
+prompt() { local v; printf '%s' "$1" >&2; read -r v; printf '%s' "$v"; }
+
+AE="$(prompt 'ALERT_EMAIL (通知先メール): ')"
+SMTPHOST="$(prompt 'SMTP_HOST: ')"
+SP="$(prompt 'SMTP_PORT [587]: ')"; SP="${SP:-587}"
+SU="$(prompt "SMTP_USER [${AE}]: ")"; SU="${SU:-$AE}"
+printf 'SMTP_PASSWORD: ' >&2
+stty -echo 2>/dev/null || true
+IFS= read -r PW
+stty echo 2>/dev/null || true
+printf '\n' >&2
+BL="$(prompt 'ALERT_BLOCKLIST_URL (任意・空でスキップ): ')"
+
+# env ファイル（bash が source する）へ安全に書けるよう \ " ` $ をエスケープ
+esc() { printf '%s' "$1" | sed 's/[\\"`$]/\\&/g'; }
+
+fragment="$(
+  printf 'ENABLE_TRAFFIC_ALERT="true"\n'
+  printf 'ALERT_EMAIL="%s"\n' "$(esc "$AE")"
+  printf 'SMTP_HOST="%s"\n' "$(esc "$SMTPHOST")"
+  printf 'SMTP_PORT="%s"\n' "$(esc "$SP")"
+  printf 'SMTP_USER="%s"\n' "$(esc "$SU")"
+  printf 'SMTP_PASSWORD="%s"\n' "$(esc "$PW")"
+  printf 'ALERT_BLOCKLIST_URL="%s"\n' "$(esc "$BL")"
+)"
+
+# サーバー側で env を安全に更新する（資格情報を予測可能な /tmp に置かない）。
+#   - リモートスクリプトはユーザー入力を含まない固定文字列 → シェルインジェクション不可
+#   - パスワードを含む fragment は stdin のデータとして渡す（コマンド列に展開しない）
+#   - 一時ファイルは root 所有・umask 077 の mktemp（予測不能・0600・レース回避）
+REMOTE_MERGE='
+set -e
+umask 077
+ENVF=/etc/orenovpn/orenovpn.env
+new="$(mktemp)"
+frag="$(mktemp)"
+cat > "$frag"
+grep -vE "^(ENABLE_TRAFFIC_ALERT|ALERT_EMAIL|SMTP_HOST|SMTP_PORT|SMTP_USER|SMTP_PASSWORD|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
+cat "$frag" >> "$new"
+install -m 600 -o root -g root "$new" "$ENVF"
+rm -f "$new" "$frag"
+/usr/local/sbin/setup.sh alerts
+'
+# shellcheck disable=SC2086
+printf '%s\n' "$fragment" | $ORENOVPN_SSH "sudo bash -c '$REMOTE_MERGE'"
+
+printf '\n完了しました。`make alerts-test` で送信確認できます。\n' >&2

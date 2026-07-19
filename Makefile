@@ -32,7 +32,7 @@ export NAME
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
-.PHONY: help preset init plan deploy apply status setup ssh doctor alerts-test alerts-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
+.PHONY: help preset init plan deploy apply status setup ssh doctor alerts-test alerts-status configure-alerts client clients show profile serve-profile remove destroy fmt validate check images volume-types
 
 help: ## このヘルプを表示
 	@grep -hE '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -96,6 +96,9 @@ alerts-test: ## 通信監視のテストメールを送信（設定確認用）
 
 alerts-status: ## 通信監視 timer の状態と直近ログを表示
 	@$(SSH) 'systemctl status orenovpn-watch.timer --no-pager || true; echo; journalctl -u orenovpn-watch --no-pager -n 20 || true'
+
+configure-alerts: ## 既存サーバーにアラート設定を反映（対話入力・state に残さない）
+	@ORENOVPN_SSH="$(SSH)" bash scripts/configure-alerts.sh
 
 client: ## クライアントを追加   例: make client NAME=my-phone
 	@$(NAMECHECK)
