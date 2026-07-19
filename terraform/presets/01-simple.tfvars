@@ -44,3 +44,6 @@ wg_clients = ["phone"] # 例: ["phone", "laptop", "tablet"]
 # --- ⑥ セキュリティ強化（既定で ON）----------------------------------------
 # enable_fail2ban     = true              # SSH ブルートフォース対策
 # enable_auto_updates = true              # 自動セキュリティ更新
+# --- QR配布/失効の詳細（任意）---
+# randomize_profile_port = true           # make serve-profile の配信ポートをランダム化
+# enable_cert_revocation = true           # IKEv2証明書の失効(CRL)を有効化（make remove で失効可能）

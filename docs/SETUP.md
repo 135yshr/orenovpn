@@ -262,7 +262,7 @@ make remove NAME=my-laptop    # 削除
 | `make ssh` で `Permission denied (publickey)` | 鍵を既定外パスに作った可能性。`make ssh SSH_KEY=~/.ssh/orenovpn` で鍵を指定（[1-3 の注意](#1-3-ssh-鍵ペアを作成)参照）|
 | `make status` 等が `@:` や空ホストで失敗 | まだ `make deploy` が完了していない。先に `make deploy` を実行 |
 | `User data size must be under 16KiB` | ConoHa は base64 化後 16KiB 制限。埋め込みスクリプトは自動で最小化済み（余裕は僅少）。スクリプトに大量のコメントを足した場合は生 user_data を 12KB 未満に抑える |
-| SSH で繋がらない | SG は `ssh_port`（既定 22）のみ許可。`ssh -p 22 vpnadmin@IP`。緊急時は ConoHa の Web コンソールで復旧 |
+| SSH で繋がらない | SG は 22 番のみ許可（SSH は 22 番固定）。`ssh vpnadmin@IP`。緊急時は ConoHa の Web コンソールで復旧 |
 | `image not found` | `openstack image list` で正しい `image_name` を確認 |
 | VPN 接続できるが通信できない | `make ssh` → `sudo wg show` でハンドシェイクを確認。`sudo cat /var/log/orenovpn-setup.log` でエラー確認 |
 | クライアント追加が反映されない | `sudo systemctl status wg-quick@wg0` を確認 |

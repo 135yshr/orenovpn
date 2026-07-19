@@ -39,6 +39,7 @@ write_files:
       WG_INITIAL_CLIENTS="${join(" ", wg_clients)}"
       ENABLE_FAIL2BAN="${enable_fail2ban}"
       ENABLE_AUTO_UPDATES="${enable_auto_updates}"
+      ENABLE_CERT_REVOCATION="${enable_cert_revocation}"
 
   # --- SSH 堅牢化（ポート22固定・鍵認証のみ・パスワード無効）----------------
   # root は prohibit-password（鍵ならOK）でフォールバックを残す。AllowUsers は

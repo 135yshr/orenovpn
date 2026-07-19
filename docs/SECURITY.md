@@ -8,7 +8,7 @@
 ### ネットワーク層（多層防御）
 
 - **ConoHa セキュリティグループ**（クラウド側 FW）で最小許可
-  - SSH（`ssh_port`）… `allowed_ssh_cidr` で送信元を制限可能
+  - SSH（22番固定）… `allowed_ssh_cidr` で送信元を制限可能
   - WireGuard（`wg_port`/UDP）… VPN 接続に必要
   - ICMP … 疎通確認用
   - それ以外の受信はすべて拒否

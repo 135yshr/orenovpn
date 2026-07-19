@@ -20,6 +20,8 @@ PKI=/etc/orenovpn/pki
 CLIENT_DIR=/etc/orenovpn/clients
 CA_CN="orenovpn CA"
 SERVER_IP="${SERVER_IP:-${WG_ENDPOINT_IP:-}}"
+# 証明書失効(CRL)が有効なら発行を openssl ca 経由にし、remove で失効させる。
+ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
 
 mkdir -p "$CLIENT_DIR"; umask 077
 die() { echo "エラー: $*" >&2; exit 1; }
@@ -33,16 +35,25 @@ cmd_add() {
   [ -f "${CLIENT_DIR}/${name}.mobileconfig" ] && die "クライアント '${name}' は既に存在します"
 
   # クライアント鍵・証明書（CA 署名, clientAuth）
-  openssl genrsa -out "${PKI}/${name}-key.pem" 4096 2>/dev/null
-  openssl req -new -key "${PKI}/${name}-key.pem" -subj "/CN=${name}" -out "${PKI}/${name}.csr" 2>/dev/null
   # SAN: iOS は mobileconfig の LocalIdentifier("iphone"等) を ID_FQDN 型で送るため、
   # 証明書には dNSName を含める必要がある（無いと strongSwan が
   # "no trusted public key found" で AUTH_FAILED になる）。email も残し両対応にする。
-  openssl x509 -req -in "${PKI}/${name}.csr" -CA "${PKI}/ca-cert.pem" -CAkey "${PKI}/ca-key.pem" \
-    -CAcreateserial -days 3650 -sha256 \
-    -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectAltName=DNS:%s,email:%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$name" "$name") \
-    -out "${PKI}/${name}-cert.pem" 2>/dev/null
-  rm -f "${PKI}/${name}.csr"
+  local extf; extf="$(mktemp)"
+  printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectAltName=DNS:%s,email:%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$name" "$name" > "$extf"
+  openssl genrsa -out "${PKI}/${name}-key.pem" 4096 2>/dev/null
+  openssl req -new -key "${PKI}/${name}-key.pem" -subj "/CN=${name}" -out "${PKI}/${name}.csr" 2>/dev/null
+  if [ "${ENABLE_CERT_REVOCATION}" = "true" ] && [ -f "${PKI}/ca.cnf" ]; then
+    # openssl ca 方式: index.txt に登録され、後で失効(CRL)できる
+    openssl ca -batch -notext -config "${PKI}/ca.cnf" -in "${PKI}/${name}.csr" \
+      -out "${PKI}/${name}-cert.pem" -days 3650 -extfile "$extf" 2>/dev/null \
+      || { rm -f "$extf"; die "証明書の発行に失敗しました（openssl ca）"; }
+  else
+    openssl x509 -req -in "${PKI}/${name}.csr" -CA "${PKI}/ca-cert.pem" -CAkey "${PKI}/ca-key.pem" \
+      -CAcreateserial -days 3650 -sha256 -extfile "$extf" \
+      -out "${PKI}/${name}-cert.pem" 2>/dev/null \
+      || { rm -f "$extf"; die "証明書の発行に失敗しました"; }
+  fi
+  rm -f "${PKI}/${name}.csr" "$extf"
 
   # PKCS12（鍵+証明書+CA）。プロファイル内に埋め込むためのパスワードを生成。
   # ⚠️ OpenSSL 3.x 既定(AES-256/PBKDF2)の PKCS12 は Apple のプロファイル
@@ -141,12 +152,35 @@ cmd_remove() {
   local name="${1:-}"
   [ -n "$name" ] || die "クライアント名を指定してください"
   [ -f "${CLIENT_DIR}/${name}.mobileconfig" ] || die "クライアント '${name}' は存在しません"
+
+  # 失効が有効で、かつこの証明書が CA DB(index.txt)に登録済みなら失効させる。
+  # （openssl ca 方式で発行された証明書のみ失効可能。旧 x509 発行分は revoke 不可）
+  local revoked=0
+  if [ "${ENABLE_CERT_REVOCATION}" = "true" ] && [ -f "${PKI}/ca.cnf" ] \
+     && [ -f "${PKI}/${name}-cert.pem" ]; then
+    if openssl ca -config "${PKI}/ca.cnf" -revoke "${PKI}/${name}-cert.pem" 2>/dev/null; then
+      if openssl ca -gencrl -config "${PKI}/ca.cnf" -out "${PKI}/crl.pem" 2>/dev/null; then
+        mkdir -p /etc/swanctl/x509crl
+        install -m644 "${PKI}/crl.pem" /etc/swanctl/x509crl/orenovpn.crl
+        swanctl --load-all >/dev/null 2>&1 || true
+        revoked=1
+      fi
+    fi
+  fi
+
   rm -f "${CLIENT_DIR}/${name}.mobileconfig" \
         "${PKI}/${name}-key.pem" "${PKI}/${name}-cert.pem" "${PKI}/${name}.p12"
-  echo "クライアント '${name}' のローカル設定・鍵ファイルを削除しました（サーバー上の配布物のみ）。"
-  echo "⚠️ これは接続アクセスの“失効”ではありません。発行済みクライアント証明書は"
-  echo "   CRL/OCSP 未運用のため、手元に残っていれば最長10年、接続に使用できてしまいます。"
-  echo "   接続を確実に遮断するには CA を再生成し全クライアントを作り直してください。"
+
+  if [ "$revoked" = 1 ]; then
+    echo "クライアント '${name}' を削除し、証明書を失効(CRL)しました。"
+    echo "以後この証明書では接続できません（strongSwan が CRL で拒否）。"
+  else
+    echo "クライアント '${name}' のローカル設定・鍵ファイルを削除しました（サーバー上の配布物のみ）。"
+    echo "⚠️ これは接続アクセスの「失効」ではありません。発行済みクライアント証明書は"
+    echo "   手元に残っていれば最長10年、接続に使用できてしまいます。"
+    echo "   厳密な失効を使うには enable_cert_revocation=true で構築し直してください"
+    echo "   （それ以前に発行した証明書は CA 再生成＋全員作り直しが必要）。"
+  fi
 }
 
 cmd_list() {
