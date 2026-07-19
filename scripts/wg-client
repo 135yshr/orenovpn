@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+#
+# wg-client : orenovpn の WireGuard クライアント管理ツール
+#
+#   wg-client add <name>      クライアントを追加（鍵・IP を自動割当、QR 表示）
+#   wg-client remove <name>   クライアントを削除
+#   wg-client list            クライアント一覧を表示
+#   wg-client show <name>     設定と QR コードを再表示
+#
+# サーバー上で root（sudo）で実行する。
+#
+set -euo pipefail
+
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+
+WG_IF=wg0
+WG_CONF="/etc/wireguard/${WG_IF}.conf"
+CLIENT_DIR=/etc/orenovpn/clients
+SERVER_PUB="$(cat /etc/wireguard/server_public.key)"
+
+mkdir -p "$CLIENT_DIR"
+umask 077
+
+die() { echo "エラー: $*" >&2; exit 1; }
+
+require_root() {
+  [ "$(id -u)" -eq 0 ] || die "root 権限で実行してください（sudo wg-client ...）"
+}
+
+# 稼働中インターフェイスへ設定を反映（トンネルを落とさず同期）
+reload_wg() {
+  if ip link show "$WG_IF" >/dev/null 2>&1; then
+    wg syncconf "$WG_IF" <(wg-quick strip "$WG_IF")
+  fi
+}
+
+# 次に割り当てる VPN ホスト番号（IPv4 の第4オクテット）を決定
+# 既定サブネットは /24 前提。カスタム時は要調整。
+next_host_num() {
+  local prefix="${WG_ADDRESS_V4%.*}"   # 例: 10.66.66
+  local max=1 ip octet
+  while read -r ip; do
+    octet="${ip##*.}"
+    (( octet > max )) && max="$octet"
+  done < <(grep -oE "${prefix//./\\.}\.[0-9]+/32" "$WG_CONF" 2>/dev/null | cut -d/ -f1)
+  local next=$(( max + 1 ))
+  (( next <= 254 )) || die "IP プールが枯渇しました（/24 の上限）"
+  echo "$next"
+}
+
+client_exists() {
+  grep -q "^# BEGIN client:${1}$" "$WG_CONF" 2>/dev/null
+}
+
+cmd_add() {
+  require_root
+  local name="${1:-}" quiet="${2:-}"
+  [ -n "$name" ] || die "クライアント名を指定してください"
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || die "クライアント名は英数字・ハイフン・アンダースコアのみ"
+  client_exists "$name" && die "クライアント '${name}' は既に存在します"
+
+  local num; num="$(next_host_num)"
+  local prefix="${WG_ADDRESS_V4%.*}"
+  local client_v4="${prefix}.${num}"
+
+  # クライアント鍵と事前共有鍵（PSK で対称鍵の追加防御層を付与）
+  local priv pub psk
+  priv="$(wg genkey)"
+  pub="$(echo "$priv" | wg pubkey)"
+  psk="$(wg genpsk)"
+
+  # サーバー側 AllowedIPs（このクライアントに割り当てる VPN 内アドレス）
+  local peer_allowed="${client_v4}/32"
+  local client_address="${client_v4}/32"
+  if [ "${WG_ENABLE_IPV6}" = "true" ]; then
+    local prefix6="${WG_ADDRESS_V6%::*}"
+    local client_v6="${prefix6}::${num}"
+    peer_allowed="${peer_allowed}, ${client_v6}/128"
+    client_address="${client_address}, ${client_v6}/128"
+  fi
+
+  # サーバー設定へピアを追記（BEGIN/END タグで削除を容易に）
+  cat >> "$WG_CONF" <<EOF
+
+# BEGIN client:${name}
+[Peer]
+PublicKey = ${pub}
+PresharedKey = ${psk}
+AllowedIPs = ${peer_allowed}
+# END client:${name}
+EOF
+
+  # クライアント設定ファイルを生成
+  local dns_line=""
+  [ -n "${WG_DNS}" ] && dns_line="DNS = ${WG_DNS}"
+  cat > "${CLIENT_DIR}/${name}.conf" <<EOF
+[Interface]
+PrivateKey = ${priv}
+Address = ${client_address}
+${dns_line}
+
+[Peer]
+PublicKey = ${SERVER_PUB}
+PresharedKey = ${psk}
+Endpoint = ${WG_ENDPOINT_IP}:${WG_PORT}
+AllowedIPs = ${WG_ALLOWED_IPS}
+PersistentKeepalive = 25
+EOF
+  chmod 600 "${CLIENT_DIR}/${name}.conf"
+
+  reload_wg
+
+  if [ "$quiet" != "--quiet" ]; then
+    echo "クライアント '${name}' を追加しました（VPN IP: ${client_v4}）"
+    echo
+    cmd_show "$name"
+  fi
+}
+
+cmd_remove() {
+  require_root
+  local name="${1:-}"
+  [ -n "$name" ] || die "クライアント名を指定してください"
+  client_exists "$name" || die "クライアント '${name}' は存在しません"
+
+  # 稼働中インターフェイスから該当ピアを外す
+  local pub
+  pub="$(awk "/^# BEGIN client:${name}\$/{f=1} f&&/PublicKey/{print \$3; exit}" "$WG_CONF")"
+  if [ -n "$pub" ] && ip link show "$WG_IF" >/dev/null 2>&1; then
+    wg set "$WG_IF" peer "$pub" remove || true
+  fi
+
+  # 設定ファイルからブロックを削除
+  sed -i "/^# BEGIN client:${name}\$/,/^# END client:${name}\$/d" "$WG_CONF"
+  # ブロック前に入る空行の掃除（連続空行を1つに）
+  sed -i '/^$/N;/^\n$/D' "$WG_CONF"
+
+  rm -f "${CLIENT_DIR}/${name}.conf"
+  reload_wg
+  echo "クライアント '${name}' を削除しました"
+}
+
+cmd_list() {
+  echo "== 登録済みクライアント =="
+  grep -oE '^# BEGIN client:[A-Za-z0-9_-]+$' "$WG_CONF" 2>/dev/null \
+    | sed 's/^# BEGIN client://' | sort || true
+  echo
+  echo "== 稼働中ピアの状態 (wg show) =="
+  wg show "$WG_IF" 2>/dev/null || echo "（インターフェイス未起動）"
+}
+
+cmd_show() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "クライアント名を指定してください"
+  local conf="${CLIENT_DIR}/${name}.conf"
+  [ -f "$conf" ] || die "クライアント '${name}' の設定が見つかりません"
+
+  echo "----- ${name}.conf -----"
+  cat "$conf"
+  echo "------------------------"
+  echo
+  echo "▼ QR コード（スマホの WireGuard アプリでスキャン）:"
+  if command -v qrencode >/dev/null 2>&1; then
+    qrencode -t ansiutf8 < "$conf"
+  else
+    echo "（qrencode 未インストール）"
+  fi
+  echo
+  echo "設定ファイルの取得（ローカルから）:"
+  echo "  scp -P ${SSH_PORT:-22} <user>@${WG_ENDPOINT_IP}:${conf} ./${name}.conf"
+}
+
+usage() {
+  cat <<EOF
+使い方: wg-client <コマンド> [引数]
+
+  add <name>      クライアントを追加（QR コードを表示）
+  remove <name>   クライアントを削除
+  list            クライアント一覧
+  show <name>     設定と QR コードを再表示
+
+例:
+  sudo wg-client add my-phone
+  sudo wg-client show my-phone
+  sudo wg-client remove my-phone
+EOF
+}
+
+case "${1:-}" in
+  add)    shift; cmd_add "$@" ;;
+  remove|rm|del) shift; cmd_remove "$@" ;;
+  list|ls) cmd_list ;;
+  show)   shift; cmd_show "$@" ;;
+  *)      usage; exit 1 ;;
+esac

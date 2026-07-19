@@ -1,0 +1,43 @@
+# =============================================================================
+# 機密・状態ファイルは絶対にコミットしない
+# =============================================================================
+
+# 認証情報・個人設定（最重要）
+terraform.tfvars
+*.auto.tfvars
+*.tfvars.json
+!terraform.tfvars.example
+
+# Terraform 状態（サーバー情報・シークレットを含む）
+*.tfstate
+*.tfstate.*
+.terraform/
+.terraform.lock.hcl
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+
+# WireGuard 鍵・クライアント設定
+*.key
+*.conf
+!terraform/templates/*.conf
+clients/
+*.png
+
+# SSH 鍵
+id_ed25519*
+id_rsa*
+*.pem
+
+# ローカル make 設定（各自の鍵パス等）
+orenovpn.local.mk
+
+# OS / エディタ
+.DS_Store
+*.swp
+*~
+
+# クライアント構成ファイル（秘密鍵を含む・取得物）
+*.mobileconfig
+*.download

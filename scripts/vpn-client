@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+#
+# vpn-client : VPN_PROTOCOL に応じてクライアント管理を振り分けるラッパー。
+#   使い方は各実装（wg-client / ikev2-client）と同じ:
+#     vpn-client add <name> / remove <name> / list / show <name>
+#
+set -euo pipefail
+
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090
+[ -f "$ENV_FILE" ] && source "$ENV_FILE"
+VPN_PROTOCOL="${VPN_PROTOCOL:-wireguard}"
+
+case "$VPN_PROTOCOL" in
+  wireguard) exec /usr/local/sbin/wg-client "$@" ;;
+  ikev2)     exec /usr/local/sbin/ikev2-client "$@" ;;
+  *)         echo "不明な VPN_PROTOCOL: $VPN_PROTOCOL" >&2; exit 1 ;;
+esac

@@ -1,0 +1,62 @@
+#cloud-config
+# =============================================================================
+# orenovpn サーバーブートストラップ（フェーズ1・最小限）
+#   目的: 高速・確実に起動し SSH 疎通を確立すること。
+#   ここでは重いパッケージ導入は行わない。WireGuard 等の導入・構成は
+#   フェーズ2（`make setup` が setup.sh を SSH 経由で実行）で行う。
+# =============================================================================
+timezone: ${timezone}
+ssh_pwauth: false
+# root は鍵ログインを残す（設定不備時のフォールバック。make setup 完了後に
+# 必要なら手動で無効化可）。swap は make setup 側で観察しながら作成する。
+disable_root: false
+
+users:
+  - name: ${admin_user}
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${ssh_public_key}
+
+write_files:
+  # --- 設定値（Terraform が生成。フェーズ2の setup.sh が参照）--------------
+  - path: /etc/orenovpn/orenovpn.env
+    permissions: '0600'
+    owner: root:root
+    content: |
+      VPN_PROTOCOL="${vpn_protocol}"
+      SSH_PORT="22"
+      WG_PORT="${wg_port}"
+      WG_ADDRESS_V4="${wg_address_v4}"
+      WG_SUBNET_V4="${wg_subnet_v4}"
+      WG_ENABLE_IPV6="${wg_enable_ipv6}"
+      WG_ADDRESS_V6="${wg_address_v6}"
+      WG_SUBNET_V6="${wg_subnet_v6}"
+      WG_DNS="${wg_dns}"
+      WG_ALLOWED_IPS="${wg_allowed_ips}"
+      WG_INITIAL_CLIENTS="${join(" ", wg_clients)}"
+      ENABLE_FAIL2BAN="${enable_fail2ban}"
+      ENABLE_AUTO_UPDATES="${enable_auto_updates}"
+
+  # --- SSH 堅牢化（ポート22固定・鍵認証のみ・パスワード無効）----------------
+  # root は prohibit-password（鍵ならOK）でフォールバックを残す。AllowUsers は
+  # 付けない（vpnops/root 両方を許可し、ロックアウトを避ける）。
+  - path: /etc/ssh/sshd_config.d/99-orenovpn.conf
+    permissions: '0644'
+    owner: root:root
+    content: |
+      PermitRootLogin prohibit-password
+      PasswordAuthentication no
+      KbdInteractiveAuthentication no
+      ChallengeResponseAuthentication no
+      PubkeyAuthentication yes
+      X11Forwarding no
+      MaxAuthTries 5
+
+runcmd:
+  # SSH 堅牢化設定を反映（ポート変更はしないため socket の扱いは不要）
+  - systemctl reload ssh 2>/dev/null || systemctl restart ssh 2>/dev/null || systemctl restart sshd 2>/dev/null || true
+
+final_message: "orenovpn phase1: cloud-init 完了。'make setup' で構成を続行してください。"

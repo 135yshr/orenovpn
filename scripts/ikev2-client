@@ -1,0 +1,201 @@
+#!/usr/bin/env bash
+#
+# ikev2-client : orenovpn の IKEv2/IPsec クライアント管理ツール
+#
+#   ikev2-client add <name>      クライアント証明書を発行し .mobileconfig を生成
+#   ikev2-client remove <name>   クライアントを削除
+#   ikev2-client list            クライアント一覧・接続状況
+#   ikev2-client show <name>     .mobileconfig の場所と導入手順を表示
+#
+# iPhone/macOS の標準VPN（アプリ不要）で接続するための構成プロファイルを作る。
+# サーバー上で root（sudo）で実行する。
+#
+set -euo pipefail
+
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090
+source "$ENV_FILE"
+
+PKI=/etc/orenovpn/pki
+CLIENT_DIR=/etc/orenovpn/clients
+CA_CN="orenovpn CA"
+SERVER_IP="${SERVER_IP:-${WG_ENDPOINT_IP:-}}"
+
+mkdir -p "$CLIENT_DIR"; umask 077
+die() { echo "エラー: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "root 権限で実行してください（sudo）"
+[ -n "$SERVER_IP" ] || die "SERVER_IP を特定できません（setup.sh 実行後に再試行してください）"
+
+cmd_add() {
+  local name="${1:-}" quiet="${2:-}"
+  [ -n "$name" ] || die "クライアント名を指定してください"
+  [[ "$name" =~ ^[A-Za-z0-9_-]+$ ]] || die "クライアント名は英数字・ハイフン・アンダースコアのみ"
+  [ -f "${CLIENT_DIR}/${name}.mobileconfig" ] && die "クライアント '${name}' は既に存在します"
+
+  # クライアント鍵・証明書（CA 署名, clientAuth）
+  openssl genrsa -out "${PKI}/${name}-key.pem" 4096 2>/dev/null
+  openssl req -new -key "${PKI}/${name}-key.pem" -subj "/CN=${name}" -out "${PKI}/${name}.csr" 2>/dev/null
+  # SAN: iOS は mobileconfig の LocalIdentifier("iphone"等) を ID_FQDN 型で送るため、
+  # 証明書には dNSName を含める必要がある（無いと strongSwan が
+  # "no trusted public key found" で AUTH_FAILED になる）。email も残し両対応にする。
+  openssl x509 -req -in "${PKI}/${name}.csr" -CA "${PKI}/ca-cert.pem" -CAkey "${PKI}/ca-key.pem" \
+    -CAcreateserial -days 3650 -sha256 \
+    -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectAltName=DNS:%s,email:%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$name" "$name") \
+    -out "${PKI}/${name}-cert.pem" 2>/dev/null
+  rm -f "${PKI}/${name}.csr"
+
+  # PKCS12（鍵+証明書+CA）。プロファイル内に埋め込むためのパスワードを生成。
+  # ⚠️ OpenSSL 3.x 既定(AES-256/PBKDF2)の PKCS12 は Apple のプロファイル
+  #   インストーラが読めず "certificate could not be verified" になる。
+  #   Apple 互換の旧来形式(3DES/SHA1)で出力する必要がある(-legacy)。
+  local p12pass; p12pass="$(openssl rand -hex 12)"
+  openssl pkcs12 -export -legacy -macalg sha1 \
+    -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES \
+    -inkey "${PKI}/${name}-key.pem" -in "${PKI}/${name}-cert.pem" \
+    -certfile "${PKI}/ca-cert.pem" -passout "pass:${p12pass}" -out "${PKI}/${name}.p12" 2>/dev/null
+
+  # base64（CA は DER 形式）
+  local ca_b64 p12_b64 u_top u_ca u_p12 u_vpn
+  ca_b64="$(openssl x509 -in "${PKI}/ca-cert.pem" -outform der | base64 -w0)"
+  p12_b64="$(base64 -w0 < "${PKI}/${name}.p12")"
+  u_top="$(uuidgen)"; u_ca="$(uuidgen)"; u_p12="$(uuidgen)"; u_vpn="$(uuidgen)"
+
+  cat > "${CLIENT_DIR}/${name}.mobileconfig" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadDisplayName</key><string>orenovpn (${name})</string>
+  <key>PayloadIdentifier</key><string>jp.orenovpn.${name}</string>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadUUID</key><string>${u_top}</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.security.root</string>
+      <key>PayloadIdentifier</key><string>jp.orenovpn.ca</string>
+      <key>PayloadUUID</key><string>${u_ca}</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>orenovpn CA</string>
+      <key>PayloadCertificateFileName</key><string>ca.cer</string>
+      <key>PayloadContent</key>
+      <data>${ca_b64}</data>
+    </dict>
+    <dict>
+      <key>PayloadType</key><string>com.apple.security.pkcs12</string>
+      <key>PayloadIdentifier</key><string>jp.orenovpn.cert.${name}</string>
+      <key>PayloadUUID</key><string>${u_p12}</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>${name}</string>
+      <key>PayloadCertificateFileName</key><string>${name}.p12</string>
+      <key>Password</key><string>${p12pass}</string>
+      <key>PayloadContent</key>
+      <data>${p12_b64}</data>
+    </dict>
+    <dict>
+      <key>PayloadType</key><string>com.apple.vpn.managed</string>
+      <key>PayloadIdentifier</key><string>jp.orenovpn.vpn.${name}</string>
+      <key>PayloadUUID</key><string>${u_vpn}</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>orenovpn</string>
+      <key>UserDefinedName</key><string>orenovpn</string>
+      <key>VPNType</key><string>IKEv2</string>
+      <key>IKEv2</key>
+      <dict>
+        <key>RemoteAddress</key><string>${SERVER_IP}</string>
+        <key>RemoteIdentifier</key><string>${SERVER_IP}</string>
+        <key>LocalIdentifier</key><string>${name}</string>
+        <key>AuthenticationMethod</key><string>Certificate</string>
+        <key>PayloadCertificateUUID</key><string>${u_p12}</string>
+        <key>ServerCertificateIssuerCommonName</key><string>${CA_CN}</string>
+        <key>ExtendedAuthEnabled</key><integer>0</integer>
+        <key>IKESecurityAssociationParameters</key>
+        <dict>
+          <key>EncryptionAlgorithm</key><string>AES-256</string>
+          <key>IntegrityAlgorithm</key><string>SHA2-256</string>
+          <key>DiffieHellmanGroup</key><integer>14</integer>
+        </dict>
+        <key>ChildSecurityAssociationParameters</key>
+        <dict>
+          <key>EncryptionAlgorithm</key><string>AES-256</string>
+          <key>IntegrityAlgorithm</key><string>SHA2-256</string>
+          <key>DiffieHellmanGroup</key><integer>14</integer>
+        </dict>
+      </dict>
+    </dict>
+  </array>
+</dict>
+</plist>
+EOF
+  chmod 600 "${CLIENT_DIR}/${name}.mobileconfig"
+
+  if [ "$quiet" != "--quiet" ]; then
+    echo "クライアント '${name}' の構成プロファイルを作成しました。"
+    echo
+    cmd_show "$name"
+  fi
+}
+
+cmd_remove() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "クライアント名を指定してください"
+  [ -f "${CLIENT_DIR}/${name}.mobileconfig" ] || die "クライアント '${name}' は存在しません"
+  rm -f "${CLIENT_DIR}/${name}.mobileconfig" \
+        "${PKI}/${name}-key.pem" "${PKI}/${name}-cert.pem" "${PKI}/${name}.p12"
+  echo "クライアント '${name}' のローカル設定・鍵ファイルを削除しました（サーバー上の配布物のみ）。"
+  echo "⚠️ これは接続アクセスの“失効”ではありません。発行済みクライアント証明書は"
+  echo "   CRL/OCSP 未運用のため、手元に残っていれば最長10年、接続に使用できてしまいます。"
+  echo "   接続を確実に遮断するには CA を再生成し全クライアントを作り直してください。"
+}
+
+cmd_list() {
+  echo "== 登録済みクライアント =="
+  ls -1 "${CLIENT_DIR}"/*.mobileconfig 2>/dev/null | sed 's#.*/##; s/\.mobileconfig$//' || echo "（なし）"
+  echo
+  echo "== 現在の IPsec 接続 (swanctl) =="
+  swanctl --list-sas 2>/dev/null || echo "（接続なし/未起動）"
+}
+
+cmd_show() {
+  local name="${1:-}"
+  [ -n "$name" ] || die "クライアント名を指定してください"
+  local prof="${CLIENT_DIR}/${name}.mobileconfig"
+  [ -f "$prof" ] || die "クライアント '${name}' の構成プロファイルが見つかりません"
+
+  cat <<EOF
+▼ iPhone / macOS への導入手順（アプリ不要・標準VPN）
+
+構成プロファイル: ${prof}
+
+1) このファイルを手元の端末に取得:
+     scp -P ${SSH_PORT:-22} <user>@${SERVER_IP}:${prof} ./${name}.mobileconfig
+
+2) 端末にインストール:
+   - iPhone: ファイルを AirDrop/メール等で送り、開く →「設定」→
+     「プロファイルがダウンロードされました」→ インストール
+   - macOS: ダブルクリック →「システム設定」→「デバイス管理」→ インストール
+
+3) 「設定」→「VPN」に "orenovpn" が追加される。トグルON で接続。
+
+※ 証明書認証のためパスワード入力は不要です。
+EOF
+}
+
+usage() {
+  cat <<EOF
+使い方: ikev2-client <コマンド> [引数]
+  add <name>      クライアントを追加（.mobileconfig を生成）
+  remove <name>   クライアントを削除
+  list            一覧・接続状況
+  show <name>     構成プロファイルの場所と導入手順を表示
+EOF
+}
+
+case "${1:-}" in
+  add)           shift; cmd_add "$@" ;;
+  remove|rm|del) shift; cmd_remove "$@" ;;
+  list|ls)       cmd_list ;;
+  show)          shift; cmd_show "$@" ;;
+  *)             usage; exit 1 ;;
+esac
