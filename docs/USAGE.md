@@ -182,7 +182,7 @@ Wi-Fi / モバイル通信への接続時に自動で VPN が張られます。
 # クライアントを作成（未作成の場合）
 make client NAME=macbook
 
-# サーバーから設定ファイルを取得（ポートは ssh_port に合わせる）
+# サーバーから設定ファイルを取得（SSH は 22 番固定）
 scp -P 22 vpnadmin@<サーバーIP>:/etc/orenovpn/clients/macbook.conf ./
 ```
 

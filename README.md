@@ -141,8 +141,6 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `randomize_profile_port` | `false` | QR 配布ポートを apply 時にランダム化 |
 | `enable_cert_revocation` | `false` | IKEv2 証明書の失効(CRL)を有効化（`make remove` で失効可能）|
 
-> SSH ポートは事故防止のため **22 番固定**です（`ssh_port` 変数は廃止済み）。
-
 ---
 
 ## セキュリティ
