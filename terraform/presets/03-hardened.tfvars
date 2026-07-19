@@ -61,7 +61,8 @@ smtp_user            = "you@example.com"
 smtp_password        = "CHANGE_ME_APP_PASSWORD"
 # alert_ssh_fail_threshold = 20
 # alert_traffic_mbytes     = 1024
-# alert_blocklist_url      = ""
+# 出口通信検知（悪性IPへの通信をログ＆メール通知。ログのみ・遮断はしない）
+# alert_blocklist_url = "https://example.com/malicious-ips.txt" # 1行1IP/CIDR
 
 # =============================================================================
 # デプロイ後に追加で実施（docs/SECURITY.md 参照）:

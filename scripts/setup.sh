@@ -25,6 +25,7 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
 : "${SMTP_PORT:=587}"
 : "${SMTP_USER:=}"
 : "${SMTP_PASSWORD:=}"
+: "${ALERT_BLOCKLIST_URL:=}"
 
 # -----------------------------------------------------------------------------
 # 1. WAN インターフェイスとパブリック IP を検出し env に保存
@@ -79,7 +80,7 @@ esac
 [ "${ENABLE_AUTO_UPDATES}" = "true" ] && PKGS="$PKGS unattended-upgrades apt-listchanges"
 
 if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
-  PKGS="$PKGS msmtp"
+  PKGS="$PKGS msmtp ipset"
 fi
 log "パッケージを導入中: ${PKGS}"
 # shellcheck disable=SC2086
@@ -458,11 +459,135 @@ EOF
   systemctl daemon-reload
   systemctl enable --now orenovpn-watch.timer >/dev/null 2>&1 || true
   log "通信監視を構成（orenovpn-watch.timer・5分毎）"
+
+  # ---- 出口通信検知（悪性IPブロックリスト。ログのみ・ドロップしない）--------
+  # ALERT_BLOCKLIST_URL 設定時のみ。ufw の before.rules に LOG ルールを冪等追記
+  # （NAT と同じ方式）。ipset は ufw より先に復元する service で永続化する。
+  if [ -n "${ALERT_BLOCKLIST_URL}" ]; then
+    cat >/usr/local/sbin/orenovpn-egress-refresh <<'EOS'
+#!/usr/bin/env bash
+# orenovpn-egress-refresh : 悪性IPブロックリストを取得し ipset を更新する。
+#   setup.sh が生成。orenovpn-egress-refresh.timer から毎日実行される。冪等。
+set -euo pipefail
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090,SC1091
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+: "${ALERT_BLOCKLIST_URL:=}"
+SET=orenovpn_blocklist
+PERSIST=/etc/orenovpn/blocklist.ipset
+log() { printf '[egress-refresh] %s\n' "$*" >&2; }
+
+ipset create -exist "$SET" hash:net family inet maxelem 262144
+
+if [ -z "$ALERT_BLOCKLIST_URL" ]; then
+  log "ALERT_BLOCKLIST_URL 未設定。空リストを維持"
+  exit 0
+fi
+
+tmpfile="$(mktemp)"
+trap 'rm -f "$tmpfile"' EXIT
+if ! curl -fsS --max-time 60 "$ALERT_BLOCKLIST_URL" -o "$tmpfile"; then
+  log "ブロックリスト取得失敗: $ALERT_BLOCKLIST_URL（既存セットを維持）"
+  exit 0
+fi
+
+ipset create -exist "${SET}_tmp" hash:net family inet maxelem 262144
+ipset flush "${SET}_tmp"
+count=0
+while read -r line; do
+  line="${line%%#*}"
+  line="$(printf '%s' "$line" | tr -d '[:space:]')"
+  [ -n "$line" ] || continue
+  case "$line" in
+    *[!0-9./]*) continue ;;
+  esac
+  if ipset add -exist "${SET}_tmp" "$line" 2>/dev/null; then
+    count=$((count + 1))
+  fi
+done < "$tmpfile"
+ipset swap "${SET}_tmp" "$SET"
+ipset destroy "${SET}_tmp"
+ipset save "$SET" >"$PERSIST"
+log "ブロックリスト更新完了: ${count} 件"
+EOS
+    chmod 0755 /usr/local/sbin/orenovpn-egress-refresh
+
+    # ipset を先に作成・投入（この後の ufw reload が match-set を解決できるように）
+    /usr/local/sbin/orenovpn-egress-refresh || log "初回ブロックリスト取得に失敗（timer で再試行）"
+
+    # 起動時に ufw より先に ipset を復元
+    cat >/etc/systemd/system/orenovpn-ipset-restore.service <<'EOF'
+[Unit]
+Description=orenovpn restore blocklist ipset before ufw
+DefaultDependencies=no
+Before=ufw.service network-pre.target
+ConditionPathExists=/etc/orenovpn/blocklist.ipset
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/ipset restore -exist -f /etc/orenovpn/blocklist.ipset
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    cat >/etc/systemd/system/orenovpn-egress-refresh.service <<'EOF'
+[Unit]
+Description=orenovpn egress blocklist refresh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/orenovpn-egress-refresh
+EOF
+
+    cat >/etc/systemd/system/orenovpn-egress-refresh.timer <<'EOF'
+[Unit]
+Description=Refresh orenovpn egress blocklist daily
+
+[Timer]
+OnBootSec=5min
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+    # before.rules に LOG ルールを冪等追記（NAT と同じ grep ガード方式）
+    if ! grep -q 'orenovpn-egress' /etc/ufw/before.rules; then
+      sed -i '/^:ufw-before-forward /a -A ufw-before-forward -m set --match-set orenovpn_blocklist dst -j LOG --log-prefix "orenovpn-egress: " --log-level 4' /etc/ufw/before.rules
+    fi
+
+    systemctl daemon-reload
+    systemctl enable orenovpn-ipset-restore.service >/dev/null 2>&1 || true
+    systemctl enable --now orenovpn-egress-refresh.timer >/dev/null 2>&1 || true
+    ufw reload >/dev/null 2>&1 || log "ufw reload に失敗（before.rules を確認）"
+    log "出口通信検知を有効化（before.rules に LOG ルール・daily 更新）"
+  else
+    # ブロックリスト未設定 → 出口検知の後始末（順序: ルール削除→reload→set破棄）
+    if grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then
+      sed -i '/orenovpn-egress/d' /etc/ufw/before.rules
+      ufw reload >/dev/null 2>&1 || true
+    fi
+    systemctl disable --now orenovpn-egress-refresh.timer >/dev/null 2>&1 || true
+    systemctl disable orenovpn-ipset-restore.service >/dev/null 2>&1 || true
+    ipset destroy orenovpn_blocklist >/dev/null 2>&1 || true
+  fi
 else
   if systemctl list-unit-files 2>/dev/null | grep -q orenovpn-watch.timer; then
     systemctl disable --now orenovpn-watch.timer >/dev/null 2>&1 || true
     log "通信監視を無効化（timer 停止）"
   fi
+  if grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then
+    sed -i '/orenovpn-egress/d' /etc/ufw/before.rules
+    ufw reload >/dev/null 2>&1 || true
+  fi
+  systemctl disable --now orenovpn-egress-refresh.timer >/dev/null 2>&1 || true
+  systemctl disable orenovpn-ipset-restore.service >/dev/null 2>&1 || true
+  ipset destroy orenovpn_blocklist >/dev/null 2>&1 || true
 fi
 
 log "セットアップ完了 (${VPN_PROTOCOL})"
