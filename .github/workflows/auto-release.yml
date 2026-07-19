@@ -1,0 +1,41 @@
+name: Auto Release
+
+# main へ push（PR マージ含む）されるたびに semantic-release を実行し、
+# gitmoji でバージョンを自動採番してタグ・GitHub Release・CHANGELOG を生成する。
+on:
+  push:
+    branches: [main]
+
+# リリース処理は同時に走らせない（タグ採番の競合を防ぐ）。
+concurrency:
+  group: auto-release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write        # タグ / リリース / CHANGELOG コミットの作成
+  issues: write          # リリース通知コメント（semantic-release/github）
+  pull-requests: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0            # 全履歴が必要（バージョン判定のため）
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: "22"
+
+      # semantic-release 本体に含まれない gitmoji/changelog/git プラグインを導入。
+      # @semantic-release/github は semantic-release@25 に同梱されるため個別導入は不要。
+      - name: Install semantic-release plugins
+        run: npm install -g semantic-release@25.0.3 semantic-release-gitmoji@1.6.9 @semantic-release/changelog@6.0.3 @semantic-release/git@10.0.1
+
+      - name: Run semantic-release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx semantic-release
