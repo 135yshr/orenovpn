@@ -35,9 +35,12 @@ cmd_add() {
   # クライアント鍵・証明書（CA 署名, clientAuth）
   openssl genrsa -out "${PKI}/${name}-key.pem" 4096 2>/dev/null
   openssl req -new -key "${PKI}/${name}-key.pem" -subj "/CN=${name}" -out "${PKI}/${name}.csr" 2>/dev/null
+  # SAN: iOS は mobileconfig の LocalIdentifier("iphone"等) を ID_FQDN 型で送るため、
+  # 証明書には dNSName を含める必要がある（無いと strongSwan が
+  # "no trusted public key found" で AUTH_FAILED になる）。email も残し両対応にする。
   openssl x509 -req -in "${PKI}/${name}.csr" -CA "${PKI}/ca-cert.pem" -CAkey "${PKI}/ca-key.pem" \
     -CAcreateserial -days 3650 -sha256 \
-    -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectAltName=email:%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$name") \
+    -extfile <(printf 'basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature\nextendedKeyUsage=clientAuth\nsubjectAltName=DNS:%s,email:%s\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n' "$name" "$name") \
     -out "${PKI}/${name}-cert.pem" 2>/dev/null
   rm -f "${PKI}/${name}.csr"
 
