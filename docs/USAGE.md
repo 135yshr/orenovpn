@@ -25,6 +25,7 @@
 | `make show NAME=iphone` | 既存クライアントの設定と QR を再表示 |
 | `make clients` | クライアント一覧と接続状態を表示 |
 | `make remove NAME=iphone` | クライアント `iphone` を削除 |
+| `make doctor` | サーバー構成を自己診断（不通/通信不可の原因切り分け） |
 
 > `NAME` は英数字・ハイフン・アンダースコアのみ。デバイスごとに別名を付けます
 > （例: `iphone`, `ipad`, `macbook`, `work-pc`）。**同じ設定を複数端末で使い回さない**でください。
@@ -229,19 +230,33 @@ make client NAME=<好きな名前>
 
 ### デバイスを紛失した / 接続を無効化したい
 
-該当クライアントを削除すれば即座に接続できなくなります。
-
 ```bash
 make remove NAME=<該当クライアント>
 ```
 
+- **WireGuard**: ピアが削除され、即座に接続できなくなります。
+- **IKEv2**: 既定ではサーバー上の配布物を消すだけで、**発行済み証明書は失効しません**
+  （手元に残っていれば接続に使えてしまう）。厳密に失効させたい場合は
+  `enable_cert_revocation = true` で構築し、その状態で発行したクライアントを `make remove`
+  すると CRL に登録されて接続できなくなります。それ以前に発行した証明書を確実に無効化するには
+  CA を作り直して全クライアントを再発行してください。
+
 ### つながらないとき
+
+まず **`make doctor`** で自己診断すると、原因の切り分けが一気に進みます（ファイアウォールの
+二重稼働・NAT 未適用・待受ポート・IP 転送・IPv6 プールなどを自動点検）。
+
+```bash
+make doctor
+```
 
 | 症状 | 確認 |
 |------|------|
-| ハンドシェイクしない | ConoHa 側で `wg_port`(UDP) が開いているか、`make clients` でサーバー稼働を確認 |
-| 接続はするが通信できない | `make ssh` → `sudo wg show` と `sudo cat /var/log/orenovpn-setup.log` |
+| そもそも外部から届かない | `make doctor` で nftables の二重稼働や待受ポートを確認。ConoHa 側 SG も確認 |
+| 接続はするが通信できない（戻り 0） | `make doctor` の NAT(MASQUERADE) 項目を確認。無ければ `make setup` を再実行 |
+| IKEv2 が ON→即 OFF | サーバーログ `journalctl -u strongswan`。`no trusted public key` は証明書 SAN 不一致 |
 | QR が読めない | ターミナルのフォントを小さく／`make show NAME=...` で再表示 |
-| DNS が引けない | クライアント設定の `DNS` 行を確認（既定 `1.1.1.1,1.0.0.1`）|
+| DNS が引けない | クライアント設定の `DNS` 行を確認 |
 
-詳しいトラブルシューティングは [`SETUP.md`](SETUP.md#7-トラブルシューティング) を参照してください。
+詳しい顛末は [`TROUBLESHOOTING.md`](TROUBLESHOOTING.md)、初期セットアップは
+[`SETUP.md`](SETUP.md#7-トラブルシューティング) を参照してください。

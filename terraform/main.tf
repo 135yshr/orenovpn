@@ -39,21 +39,22 @@ resource "openstack_blockstorage_volume_v3" "boot" {
 # これにより user_data は小さく保たれ、初回ブートも高速・確実になる。
 locals {
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
-    admin_user          = var.admin_user
-    ssh_public_key      = var.ssh_public_key
-    timezone            = var.timezone
-    wg_port             = var.wg_port
-    wg_address_v4       = var.wg_address_v4
-    wg_subnet_v4        = var.wg_subnet_v4
-    wg_enable_ipv6      = var.wg_enable_ipv6
-    wg_address_v6       = var.wg_address_v6
-    wg_subnet_v6        = var.wg_subnet_v6
-    wg_dns              = var.wg_dns
-    wg_allowed_ips      = var.wg_allowed_ips
-    wg_clients          = var.wg_clients
-    enable_fail2ban     = var.enable_fail2ban
-    enable_auto_updates = var.enable_auto_updates
-    vpn_protocol        = var.vpn_protocol
+    admin_user             = var.admin_user
+    ssh_public_key         = var.ssh_public_key
+    timezone               = var.timezone
+    wg_port                = var.wg_port
+    wg_address_v4          = var.wg_address_v4
+    wg_subnet_v4           = var.wg_subnet_v4
+    wg_enable_ipv6         = var.wg_enable_ipv6
+    wg_address_v6          = var.wg_address_v6
+    wg_subnet_v6           = var.wg_subnet_v6
+    wg_dns                 = var.wg_dns
+    wg_allowed_ips         = var.wg_allowed_ips
+    wg_clients             = var.wg_clients
+    enable_fail2ban        = var.enable_fail2ban
+    enable_auto_updates    = var.enable_auto_updates
+    vpn_protocol           = var.vpn_protocol
+    enable_cert_revocation = var.enable_cert_revocation
   })
 }
 
@@ -64,8 +65,9 @@ resource "openstack_compute_instance_v2" "this" {
   key_pair  = openstack_compute_keypair_v2.this.name
 
   # カスタム SG（VPN 用）に加え、配信用に ConoHa 定義済み SG "IPv4v6-Web"(80/443) を
-  # アタッチする。ConoHa はカスタム SG の 22 以外の TCP ルールを実質適用しないため、
-  # 443 配信は定義済み SG に委ねる（enable_profile_download 時のみ）。
+  # アタッチする（enable_profile_download 時のみ）。Let's Encrypt の HTTP-01 が使う
+  # ポート80 を確実に開けるのが主目的。任意ポート配信はカスタム SG ルール
+  # (security.tf の profile_v4/v6) で開く（nftables 無効化後は TCP も正常に機能する）。
   security_groups = var.enable_profile_download ? [
     openstack_networking_secgroup_v2.vpn.name, "IPv4v6-Web"
   ] : [openstack_networking_secgroup_v2.vpn.name]

@@ -50,3 +50,9 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
 # --- ⑥ セキュリティ強化（任意）----------------------------------------------
 # enable_fail2ban     = true
 # enable_auto_updates = true
+
+# --- QR 配布 / 証明書失効（任意）--------------------------------------------
+# enable_profile_download = true          # make serve-profile 用に配信ポートを SG へ宣言
+# profile_port            = 443           # 配信ポート（既定 443。IPv4v6-Web が 80/443 を開く）
+# randomize_profile_port  = true          # 配信ポートを apply 時にランダム(20000-60000)決定
+# enable_cert_revocation  = true          # IKEv2 証明書の失効(CRL)を有効化（make remove で失効可能）

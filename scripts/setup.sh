@@ -17,6 +17,8 @@ log() { echo "[orenovpn] $*"; }
 die() { echo "[orenovpn] エラー: $*" >&2; exit 1; }
 
 VPN_PROTOCOL="${VPN_PROTOCOL:-wireguard}"
+# 証明書失効(CRL)を有効化するか（IKEv2のみ）。未設定の既存インスタンスは false 扱い。
+ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
 
 # -----------------------------------------------------------------------------
 # 1. WAN インターフェイスとパブリック IP を検出し env に保存
@@ -148,6 +150,33 @@ setup_ikev2() {
     log "IKEv2 CA を生成"
   fi
 
+  # --- 証明書失効(CRL)基盤（オプトイン・冪等）。openssl ca での発行/失効/CRL生成に必要。
+  #     これが無いと ikev2-client の失効機能が使えない。fail-open 運用（失効した証明書
+  #     のみ拒否し、CRL 期限切れでも有効クライアントはロックアウトしない）。
+  if [ "${ENABLE_CERT_REVOCATION}" = "true" ]; then
+    [ -f "$PKI/index.txt" ] || : > "$PKI/index.txt"
+    [ -f "$PKI/serial" ]    || echo 1000 > "$PKI/serial"
+    [ -f "$PKI/crlnumber" ] || echo 1000 > "$PKI/crlnumber"
+    mkdir -p "$PKI/newcerts"
+    cat > "$PKI/ca.cnf" <<CACNF
+[ca]
+default_ca = CA_default
+[CA_default]
+dir              = ${PKI}
+database         = ${PKI}/index.txt
+new_certs_dir    = ${PKI}/newcerts
+serial           = ${PKI}/serial
+crlnumber        = ${PKI}/crlnumber
+certificate      = ${PKI}/ca-cert.pem
+private_key      = ${PKI}/ca-key.pem
+default_md       = sha256
+default_crl_days = 3650
+policy           = pol_any
+[pol_any]
+commonName = supplied
+CACNF
+  fi
+
   # --- サーバー証明書（SAN=IP + serverAuth + SKI/AKI）。IP 変化時は作り直す
   if [ ! -f "$PKI/server-cert.pem" ] || ! grep -q "${SERVER_IP}" "$PKI/server-san.txt" 2>/dev/null; then
     echo "${SERVER_IP}" > "$PKI/server-san.txt"
@@ -166,6 +195,19 @@ setup_ikev2() {
   install -m600 "$PKI/ca-cert.pem"     /etc/swanctl/x509ca/ca.pem
   install -m600 "$PKI/server-cert.pem" /etc/swanctl/x509/server.pem
   install -m600 "$PKI/server-key.pem"  /etc/swanctl/private/server-key.pem
+
+  # --- CRL を生成し swanctl に配置（失効チェック用）。空でも置いておく。
+  if [ "${ENABLE_CERT_REVOCATION}" = "true" ]; then
+    mkdir -p /etc/swanctl/x509crl
+    if openssl ca -gencrl -config "$PKI/ca.cnf" -out "$PKI/crl.pem" 2>/dev/null; then
+      install -m644 "$PKI/crl.pem" /etc/swanctl/x509crl/orenovpn.crl
+      log "CRL を生成・配置（証明書失効チェック有効）"
+    fi
+  fi
+
+  # --- swanctl/charon の未使用 agent プラグイン警告(CAP_SETUID)を抑制
+  mkdir -p /etc/strongswan.d/charon
+  echo 'agent { load = no }' > /etc/strongswan.d/charon/agent.conf
 
   # --- swanctl 接続定義（IKEv2 / 証明書認証 / ロードウォリア）
   local DNS_SW; DNS_SW="$(echo "${WG_DNS}" | sed 's/,/, /g')"
