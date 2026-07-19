@@ -169,12 +169,22 @@ setup_ikev2() {
 
   # --- swanctl 接続定義（IKEv2 / 証明書認証 / ロードウォリア）
   local DNS_SW; DNS_SW="$(echo "${WG_DNS}" | sed 's/,/, /g')"
+  # IPv6 リーク対策: v6 有効時のみ ::/0 を提示し、v6 内部アドレスも配布する。
+  # （v6 を提示するだけで配布しないと、端末のネイティブ v6 がトンネル外へ漏れる。
+  #   逆に v6 無効時は ::/0 を一切提示しない＝端末に v6 経路を作らせない。）
+  local LOCAL_TS="0.0.0.0/0" POOL_ADDRS="${WG_SUBNET_V4}"
+  if [ "${WG_ENABLE_IPV6}" = "true" ]; then
+    LOCAL_TS="0.0.0.0/0, ::/0"
+    POOL_ADDRS="${WG_SUBNET_V4}, ${WG_SUBNET_V6}"
+  fi
   cat > /etc/swanctl/swanctl.conf <<EOF
 connections {
   orenovpn {
     version = 2
     proposals = aes256-sha256-modp2048,aes256gcm16-prfsha384-ecp384
-    rekey_time = 0
+    # 鍵ローテーション: IKE SA を 4 時間ごとに再生成。reauth ではなく rekey なので
+    # iOS/macOS はセッションを維持したまま鍵を更新でき、再接続は発生しない。
+    rekey_time = 14400
     # 全クライアントで UDP カプセル化(4500)を強制。非NATクライアントでも
     # ネイティブ ESP(IP proto 50) を必要とせず、UDP 500/4500 のみで通る。
     encap = yes
@@ -190,9 +200,11 @@ connections {
     }
     children {
       orenovpn {
-        local_ts = 0.0.0.0/0, ::/0
-        esp_proposals = aes256-sha256,aes256gcm16
-        rekey_time = 0
+        local_ts = ${LOCAL_TS}
+        # PFS: ESP 提案に DH 群(MODP2048=iOS の DH14 に一致)を含め、CHILD_SA を
+        # 1 時間ごとに新しい鍵交換で再生成する。過去鍵が漏れても遡って復号されない。
+        esp_proposals = aes256-sha256-modp2048,aes256gcm16-ecp384
+        rekey_time = 3600
         dpd_action = clear
       }
     }
@@ -200,7 +212,7 @@ connections {
 }
 pools {
   orenovpn_pool {
-    addrs = ${WG_SUBNET_V4}
+    addrs = ${POOL_ADDRS}
     dns = ${DNS_SW}
   }
 }
@@ -220,6 +232,21 @@ EOF
       cat /etc/ufw/before.rules
     } > "$tmp"
     mv "$tmp" /etc/ufw/before.rules
+  fi
+  # v6 有効時は before6.rules にも NAT66(MASQUERADE) を追記。トンネル内 v6 を
+  # サーバーの v6 経由で送出する（v6 出口が無ければ破棄＝トンネル外へ漏れない）。
+  if [ "${WG_ENABLE_IPV6}" = "true" ] && ! grep -q 'orenovpn-nat' /etc/ufw/before6.rules 2>/dev/null; then
+    local tmp6; tmp6="$(mktemp)"
+    {
+      echo "# orenovpn-nat BEGIN"
+      echo "*nat"
+      echo ":POSTROUTING ACCEPT [0:0]"
+      echo "-A POSTROUTING -s ${WG_SUBNET_V6} -o ${WAN_IF} -j MASQUERADE"
+      echo "COMMIT"
+      echo "# orenovpn-nat END"
+      cat /etc/ufw/before6.rules
+    } > "$tmp6"
+    mv "$tmp6" /etc/ufw/before6.rules
   fi
   sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
 
