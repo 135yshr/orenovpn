@@ -44,13 +44,15 @@ mkdir -p "$STATE_DIR" "$COOLDOWN_DIR"
 
 # ---- メール送信（msmtp 経由）----------------------------------------------
 send_mail() {
-  local subject="$1" body="$2" from
+  local subject="$1" body="$2" from sm
   if [ -z "$ALERT_EMAIL" ]; then
     logg "ALERT_EMAIL 未設定のため送信スキップ: $subject"
     return 0
   fi
   if [ "$SMTP_MODE" = "local" ]; then
-    if ! command -v sendmail >/dev/null 2>&1; then
+    sm="$(command -v sendmail 2>/dev/null || true)"
+    if [ -z "$sm" ] && [ -x /usr/sbin/sendmail ]; then sm=/usr/sbin/sendmail; fi
+    if [ -z "$sm" ]; then
       logg "sendmail(dma) 不在のため送信スキップ: $subject"
       return 0
     fi
@@ -61,7 +63,7 @@ send_mail() {
       printf 'Content-Type: text/plain; charset=UTF-8\n'
       printf '\n'
       printf '%s\n' "$body"
-    } | sendmail -t; then
+    } | "$sm" -t; then
       logg "通知送信(local/dma): $subject"
     else
       logg "通知送信失敗(local/dma): $subject"

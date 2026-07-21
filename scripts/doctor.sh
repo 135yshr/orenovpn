@@ -78,7 +78,11 @@ if [ "$ALERT" = "true" ]; then
   if $S test -x /usr/local/sbin/orenovpn-watch; then pass "監視スクリプト配置あり"; else bad "/usr/local/sbin/orenovpn-watch が無い（make setup 再実行）"; fi
   SMTP_MODE="$(getenv SMTP_MODE)"; SMTP_MODE="${SMTP_MODE:-relay}"
   if [ "$SMTP_MODE" = "local" ]; then
-    if command -v sendmail >/dev/null 2>&1; then pass "ローカルMTA(dma/sendmail) 配置あり"; else wrn "sendmail(dma) が無い（ローカルMTAモードだがメール通知不可）"; fi
+    if command -v sendmail >/dev/null 2>&1 || [ -x /usr/sbin/sendmail ] || [ -x /usr/sbin/dma ]; then
+      pass "ローカルMTA(dma/sendmail) 配置あり"
+    else
+      wrn "sendmail(dma) が無い（ローカルMTAモードだがメール通知不可）"
+    fi
     if $S ss -ltn 2>/dev/null | grep -E ':25\b' | grep -qvE '127\.0\.0\.1:25|\[::1\]:25'; then
       wrn "外部から到達可能な :25 待受あり（中継リスク・localhost のみのはず）"
     else
