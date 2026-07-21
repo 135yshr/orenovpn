@@ -125,6 +125,10 @@ sudo systemctl enable --now auditd
 SMTP 送信設定（`smtp_host` / `smtp_port` / `smtp_user` / `smtp_password`）が必要です。
 自前 SMTP サーバーを使う場合は `smtp_auth = "off"` で認証なし運用も可能です（その際 `smtp_user` / `smtp_password` は不要）。
 
+外部 SMTP を用意できない場合は、VPN 上のローカル MTA（`dma`）モードも選べます（`make configure-alerts` の方式③）。
+ローカル MTA モードは**待受ソケットを持たず中継しない**（ローカル投函のみで宛先へ直接配送）ため、オープンリレーの心配がありません。
+直接配送はメールの到達性のため、DNS 逆引き（PTR）と SPF（可能なら DKIM）の設定を推奨します。
+
 > ⚠️ **重要**: `smtp_password` は **Terraform state と `/etc/orenovpn/orenovpn.env`（0600）に
 > 平文で保存**されます。送信専用アカウントやアプリパスワードの利用を推奨します。
 > state に残したくない場合は、`make setup` 後にサーバー上の `/etc/msmtprc` を手動設定する

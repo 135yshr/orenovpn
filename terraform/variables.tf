@@ -318,6 +318,17 @@ variable "smtp_auth" {
   }
 }
 
+variable "smtp_mode" {
+  description = "アラート送信方式（\"relay\"=外部SMTPへ msmtp でリレー / \"local\"=VPN上の dma で直接配送・中継なし）"
+  type        = string
+  default     = "relay"
+
+  validation {
+    condition     = contains(["relay", "local"], var.smtp_mode)
+    error_message = "smtp_mode は \"relay\" か \"local\" を指定してください。"
+  }
+}
+
 variable "alert_ssh_fail_threshold" {
   description = "警告を出す SSH 認証失敗回数のしきい値（集計期間内の回数）"
   type        = number

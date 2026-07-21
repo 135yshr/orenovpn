@@ -23,6 +23,8 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 : "${ENABLE_TRAFFIC_ALERT:=false}"
 : "${ALERT_EMAIL:=}"
 : "${SMTP_USER:=}"
+: "${SMTP_MODE:=relay}"
+: "${MAIL_FROM:=}"
 : "${ALERT_SSH_FAIL_THRESHOLD:=20}"
 : "${ALERT_TRAFFIC_MBYTES:=1024}"
 : "${ALERT_BLOCKLIST_URL:=}"
@@ -45,6 +47,25 @@ send_mail() {
   local subject="$1" body="$2" from
   if [ -z "$ALERT_EMAIL" ]; then
     logg "ALERT_EMAIL 未設定のため送信スキップ: $subject"
+    return 0
+  fi
+  if [ "$SMTP_MODE" = "local" ]; then
+    if ! command -v sendmail >/dev/null 2>&1; then
+      logg "sendmail(dma) 不在のため送信スキップ: $subject"
+      return 0
+    fi
+    if {
+      printf 'To: %s\n' "$ALERT_EMAIL"
+      printf 'From: %s\n' "${MAIL_FROM:-$ALERT_EMAIL}"
+      printf 'Subject: [orenovpn] %s\n' "$subject"
+      printf 'Content-Type: text/plain; charset=UTF-8\n'
+      printf '\n'
+      printf '%s\n' "$body"
+    } | sendmail -t; then
+      logg "通知送信(local/dma): $subject"
+    else
+      logg "通知送信失敗(local/dma): $subject"
+    fi
     return 0
   fi
   if ! command -v msmtp >/dev/null 2>&1; then

@@ -62,6 +62,7 @@ locals {
     smtp_user                = var.smtp_user
     smtp_password            = var.smtp_password
     smtp_auth                = var.smtp_auth
+    smtp_mode                = var.smtp_mode
     alert_ssh_fail_threshold = var.alert_ssh_fail_threshold
     alert_traffic_mbytes     = var.alert_traffic_mbytes
     alert_blocklist_url      = var.alert_blocklist_url

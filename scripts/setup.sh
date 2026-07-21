@@ -26,6 +26,8 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
 : "${SMTP_USER:=}"
 : "${SMTP_PASSWORD:=}"
 : "${SMTP_AUTH:=on}"
+: "${SMTP_MODE:=relay}"
+: "${MAIL_FROM:=}"
 : "${ALERT_BLOCKLIST_URL:=}"
 
 # 通信監視・警告の構成を関数化。通常フローの section 8 と `setup.sh alerts` の両方から呼ぶ。
@@ -35,32 +37,59 @@ if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
     log "警告: ENABLE_TRAFFIC_ALERT=true だが ALERT_EMAIL/SMTP_HOST 未設定。通知は送られません"
   fi
 
-  # msmtp 送信設定（パスワードを含むため 0600 root:root）
-  umask 077
-  {
-    echo "# orenovpn が生成。SMTP リレー設定（送信専用）。手動編集は make setup で上書きされます。"
-    echo "defaults"
-    echo "tls            on"
-    echo "tls_starttls   on"
-    echo "logfile        /var/log/msmtp.log"
-    echo ""
-    echo "account        orenovpn"
-    echo "host           ${SMTP_HOST}"
-    echo "port           ${SMTP_PORT}"
-    echo "from           ${SMTP_USER:-$ALERT_EMAIL}"
-    if [ "${SMTP_AUTH}" = "off" ]; then
-      echo "auth           off"
-    else
-      echo "auth           on"
-      echo "user           ${SMTP_USER}"
-      echo "password       ${SMTP_PASSWORD}"
+  # MTA 導入（モード依存）。relay は msmtp、local は dma（待受なし・直接配送）。
+  export DEBIAN_FRONTEND=noninteractive
+  if [ "${SMTP_MODE}" = "local" ]; then
+    # ローカル MTA(dma): 待受ソケット無し＝中継なし・ローカル投函のみ。宛先MXへ直接配送。
+    if ! command -v dma >/dev/null 2>&1; then
+      echo "dma dma/relayhost string" | debconf-set-selections 2>/dev/null || true
+      echo "dma dma/mailname string $(hostname -f 2>/dev/null || hostname)" | debconf-set-selections 2>/dev/null || true
+      apt-get update -y || true
+      apt-get install -y dma || log "dma の導入に失敗"
     fi
-    echo ""
-    echo "account default : orenovpn"
-  } >/etc/msmtprc
-  chmod 600 /etc/msmtprc
-  chown root:root /etc/msmtprc
-  umask 022
+  else
+    command -v msmtp >/dev/null 2>&1 || { apt-get update -y || true; apt-get install -y msmtp || log "msmtp の導入に失敗"; }
+  fi
+
+  if [ "${SMTP_MODE}" = "local" ]; then
+    # dma: smarthost 未設定＝直接配送。待受なしのため中継リスクなし。
+    mkdir -p /etc/dma
+    {
+      echo "# orenovpn が生成。SMARTHOST 未設定＝宛先MXへ直接配送。"
+      echo "# dma は待受ソケットを持たず、ローカル投函のみ処理する（中継しない）。"
+      echo "MAILNAME $(hostname -f 2>/dev/null || hostname)"
+    } >/etc/dma/dma.conf
+    chmod 644 /etc/dma/dma.conf
+    log "ローカル MTA(dma) を構成（直接配送・中継なし・localhost のみ）"
+  else
+    # msmtp 送信設定（パスワードを含むため 0600 root:root）
+    umask 077
+    {
+      echo "# orenovpn が生成。SMTP リレー設定（送信専用）。手動編集は make setup で上書きされます。"
+      echo "defaults"
+      echo "tls            on"
+      echo "tls_starttls   on"
+      echo "logfile        /var/log/msmtp.log"
+      echo ""
+      echo "account        orenovpn"
+      echo "host           ${SMTP_HOST}"
+      echo "port           ${SMTP_PORT}"
+      echo "from           ${SMTP_USER:-$ALERT_EMAIL}"
+      if [ "${SMTP_AUTH}" = "off" ]; then
+        echo "auth           off"
+      else
+        echo "auth           on"
+        echo "user           ${SMTP_USER}"
+        echo "password       ${SMTP_PASSWORD}"
+      fi
+      echo ""
+      echo "account default : orenovpn"
+    } >/etc/msmtprc
+    chmod 600 /etc/msmtprc
+    chown root:root /etc/msmtprc
+    umask 022
+    log "msmtp（外部SMTPリレー）を構成"
+  fi
 
   if [ ! -x /usr/local/sbin/orenovpn-watch ]; then
     log "警告: /usr/local/sbin/orenovpn-watch が無い（make setup で転送されます）"
@@ -231,10 +260,7 @@ fi
 if [ "${1:-}" = "alerts" ]; then
   export DEBIAN_FRONTEND=noninteractive
   if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
-    if ! command -v msmtp >/dev/null 2>&1 || ! command -v ipset >/dev/null 2>&1; then
-      apt-get update -y || true
-      apt-get install -y msmtp ipset || true
-    fi
+    command -v ipset >/dev/null 2>&1 || { apt-get update -y || true; apt-get install -y ipset || true; }
   fi
   configure_traffic_alert
   log "アラート設定を再構成しました（alerts モード）"
@@ -293,7 +319,7 @@ esac
 [ "${ENABLE_AUTO_UPDATES}" = "true" ] && PKGS="$PKGS unattended-upgrades apt-listchanges"
 
 if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
-  PKGS="$PKGS msmtp ipset"
+  PKGS="$PKGS ipset"
 fi
 log "パッケージを導入中: ${PKGS}"
 # shellcheck disable=SC2086
