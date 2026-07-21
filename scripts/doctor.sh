@@ -71,5 +71,38 @@ elif [ "$PROTO" = "wireguard" ]; then
   echo "[INFO] 登録ピア数: ${peers:-0}"
 fi
 
+# 5. 通信監視・警告（ENABLE_TRAFFIC_ALERT=true のときのみ点検）
+ALERT="$(getenv ENABLE_TRAFFIC_ALERT)"
+if [ "$ALERT" = "true" ]; then
+  if $S systemctl is-active --quiet orenovpn-watch.timer 2>/dev/null; then pass "監視 timer(orenovpn-watch) 稼働中"; else bad "orenovpn-watch.timer が非稼働 → systemctl status orenovpn-watch.timer"; fi
+  if $S test -x /usr/local/sbin/orenovpn-watch; then pass "監視スクリプト配置あり"; else bad "/usr/local/sbin/orenovpn-watch が無い（make setup 再実行）"; fi
+  SMTP_MODE="$(getenv SMTP_MODE)"; SMTP_MODE="${SMTP_MODE:-relay}"
+  if [ "$SMTP_MODE" = "local" ]; then
+    if command -v sendmail >/dev/null 2>&1 || [ -x /usr/sbin/sendmail ] || [ -x /usr/sbin/dma ]; then
+      pass "ローカルMTA(dma/sendmail) 配置あり"
+    else
+      wrn "sendmail(dma) が無い（ローカルMTAモードだがメール通知不可）"
+    fi
+    if $S ss -ltn 2>/dev/null | grep -E ':25\b' | grep -qvE '127\.0\.0\.1:25|\[::1\]:25'; then
+      wrn "外部から到達可能な :25 待受あり（中継リスク・localhost のみのはず）"
+    else
+      pass "外部SMTP待受なし（中継なし）"
+    fi
+  else
+    if $S test -f /etc/msmtprc; then pass "msmtp 設定あり"; else wrn "/etc/msmtprc が無い（メール通知不可）"; fi
+  fi
+  BLOCKLIST="$(getenv ALERT_BLOCKLIST_URL)"
+  if [ -n "$BLOCKLIST" ]; then
+    if $S ipset list orenovpn_blocklist >/dev/null 2>&1; then pass "出口ブロックリスト(ipset) 配置あり"; else wrn "orenovpn_blocklist が未ロード"; fi
+    if $S grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then pass "出口 LOG ルール(before.rules) 設定あり"; else wrn "before.rules に出口 LOG ルールが無い"; fi
+    n="$($S ipset list orenovpn_blocklist 2>/dev/null | grep -c '^[0-9]')"
+    echo "[INFO] ブロックリスト登録数: ${n:-0}"
+  fi
+  last="$($S systemctl show -p ExecMainStatus --value orenovpn-watch.service 2>/dev/null || echo '')"
+  if [ -n "$last" ]; then echo "[INFO] 監視の直近実行ステータス: ${last}"; fi
+else
+  echo "[INFO] 通信監視は無効（ENABLE_TRAFFIC_ALERT!=true）"
+fi
+
 echo "== 結果: OK=${ok} WARN=${warn} FAIL=${fail} =="
 [ "$fail" -eq 0 ] || { echo "→ FAIL があります。上の指示に従って対処してください。"; exit 1; }

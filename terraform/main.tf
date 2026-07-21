@@ -39,22 +39,33 @@ resource "openstack_blockstorage_volume_v3" "boot" {
 # これにより user_data は小さく保たれ、初回ブートも高速・確実になる。
 locals {
   cloud_init = templatefile("${path.module}/templates/cloud-init.yaml.tftpl", {
-    admin_user             = var.admin_user
-    ssh_public_key         = var.ssh_public_key
-    timezone               = var.timezone
-    wg_port                = var.wg_port
-    wg_address_v4          = var.wg_address_v4
-    wg_subnet_v4           = var.wg_subnet_v4
-    wg_enable_ipv6         = var.wg_enable_ipv6
-    wg_address_v6          = var.wg_address_v6
-    wg_subnet_v6           = var.wg_subnet_v6
-    wg_dns                 = var.wg_dns
-    wg_allowed_ips         = var.wg_allowed_ips
-    wg_clients             = var.wg_clients
-    enable_fail2ban        = var.enable_fail2ban
-    enable_auto_updates    = var.enable_auto_updates
-    vpn_protocol           = var.vpn_protocol
-    enable_cert_revocation = var.enable_cert_revocation
+    admin_user               = var.admin_user
+    ssh_public_key           = var.ssh_public_key
+    timezone                 = var.timezone
+    wg_port                  = var.wg_port
+    wg_address_v4            = var.wg_address_v4
+    wg_subnet_v4             = var.wg_subnet_v4
+    wg_enable_ipv6           = var.wg_enable_ipv6
+    wg_address_v6            = var.wg_address_v6
+    wg_subnet_v6             = var.wg_subnet_v6
+    wg_dns                   = var.wg_dns
+    wg_allowed_ips           = var.wg_allowed_ips
+    wg_clients               = var.wg_clients
+    enable_fail2ban          = var.enable_fail2ban
+    enable_auto_updates      = var.enable_auto_updates
+    vpn_protocol             = var.vpn_protocol
+    enable_cert_revocation   = var.enable_cert_revocation
+    enable_traffic_alert     = var.enable_traffic_alert
+    alert_email              = var.alert_email
+    smtp_host                = var.smtp_host
+    smtp_port                = var.smtp_port
+    smtp_user                = var.smtp_user
+    smtp_password            = var.smtp_password
+    smtp_auth                = var.smtp_auth
+    smtp_mode                = var.smtp_mode
+    alert_ssh_fail_threshold = var.alert_ssh_fail_threshold
+    alert_traffic_mbytes     = var.alert_traffic_mbytes
+    alert_blocklist_url      = var.alert_blocklist_url
   })
 }
 

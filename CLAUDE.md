@@ -60,4 +60,4 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 
 ## 詳しいドキュメント
 
-`docs/` に `SETUP.md`（詳細手順）・`USAGE.md`（クライアント/接続）・`SECURITY.md`・`TROUBLESHOOTING.md`・`RETROSPECTIVE.md`（設計判断と既知問題の経緯）。設計の「なぜ」を追うときは RETROSPECTIVE を見る。
+`docs/` に `SETUP.md`（詳細手順）・`USAGE.md`（クライアント/接続）・`SECURITY.md`・`TROUBLESHOOTING.md`・`ALERTING.md`（通信監視・警告機能の設計と運用）・`RETROSPECTIVE.md`（設計判断と既知問題の経緯）。設計の「なぜ」を追うときは RETROSPECTIVE を見る。

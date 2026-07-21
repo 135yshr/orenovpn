@@ -8,7 +8,7 @@
 |-----------|----------|---------|------|-----------|
 | ① 簡単・すぐ使える | `01-simple.tfvars` | WireGuard | 最短で動かす。既定のまま安全機能ON | 全開放 |
 | ② 最低限セキュリティ | `02-balanced.tfvars` | WireGuard | 常用向け推奨ベースライン | 自分のIPに制限 |
-| ③ 最高のセキュア | `03-hardened.tfvars` | WireGuard | 攻撃面を最小化・管理経路を厳格化 | 固定IPのみ厳格 |
+| ③ 最高のセキュア | `03-hardened.tfvars` | WireGuard | 攻撃面を最小化・管理経路を厳格化・通信監視あり | 固定IPのみ厳格 |
 | ④ Apple標準VPN | `04-ikev2-apple.tfvars` | IKEv2 | iPhone/macOS 標準VPNでアプリ不要接続 | 全開放 |
 
 WireGuard 系（①②③）は専用アプリ（無料）で接続、④ IKEv2 は Apple 標準VPNに

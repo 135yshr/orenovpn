@@ -111,6 +111,31 @@ sudo systemctl enable --now auditd
 最高水準を求める場合は、クライアント端末で鍵を生成し、公開鍵のみをサーバーへ
 登録する運用に切り替えてください（秘密鍵がサーバーを経由しなくなります）。
 
+### 7. 通信監視・警告（任意）
+
+`enable_traffic_alert = true` にすると、`watch.sh` を systemd timer で **5 分ごと**に実行し、
+次の兆候を検知して `msmtp` でメール通知します。
+
+- SSH 認証失敗の急増（`alert_ssh_fail_threshold`、既定 20 回/周期）
+- VPN への新規クライアント接続
+- 転送量の急増（`alert_traffic_mbytes`、既定 1024 MB/周期）
+- （`alert_blocklist_url` 設定時）悪性 IP への出口通信
+
+有効化には `enable_traffic_alert = true` に加え、通知先の `alert_email` と
+SMTP 送信設定（`smtp_host` / `smtp_port` / `smtp_user` / `smtp_password`）が必要です。
+自前 SMTP サーバーを使う場合は `smtp_auth = "off"` で認証なし運用も可能です（その際 `smtp_user` / `smtp_password` は不要）。
+
+外部 SMTP を用意できない場合は、VPN 上のローカル MTA（`dma`）モードも選べます（`make configure-alerts` の方式③）。
+ローカル MTA モードは**待受ソケットを持たず中継しない**（ローカル投函のみで宛先へ直接配送）ため、オープンリレーの心配がありません。
+直接配送はメールの到達性のため、DNS 逆引き（PTR）と SPF（可能なら DKIM）の設定を推奨します。
+
+> ⚠️ **重要**: `smtp_password` は **Terraform state と `/etc/orenovpn/orenovpn.env`（0600）に
+> 平文で保存**されます。送信専用アカウントやアプリパスワードの利用を推奨します。
+> state に残したくない場合は、`make setup` 後にサーバー上の `/etc/msmtprc` を手動設定する
+> 運用も可能です。
+
+詳細は [`ALERTING.md`](ALERTING.md) を参照してください。
+
 ## インシデント時の初動
 
 ```bash

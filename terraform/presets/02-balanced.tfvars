@@ -49,3 +49,12 @@ enable_auto_updates = true # 自動セキュリティ更新
 # --- QR配布/失効の詳細（任意）---
 # randomize_profile_port = true # make serve-profile の配信ポートをランダム化
 # enable_cert_revocation = true # IKEv2証明書の失効(CRL)を有効化（make remove で失効可能）
+
+# 通信監視・警告を使うなら（詳細は docs/ALERTING.md）:
+#   注意: smtp_password を tfvars に書くと Terraform state に平文で残ります。
+#   state に残したくない場合は tfvars で設定せず `make configure-alerts` を使ってください。
+# enable_traffic_alert = true
+# alert_email          = "you@example.com"
+# smtp_host            = "smtp.gmail.com"
+# smtp_user            = "you@example.com"
+# smtp_password        = "CHANGE_ME_APP_PASSWORD" # ← state に平文保存。configure-alerts 推奨
