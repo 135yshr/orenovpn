@@ -33,8 +33,10 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
 # 通信監視・警告の構成を関数化。通常フローの section 8 と `setup.sh alerts` の両方から呼ぶ。
 configure_traffic_alert() {
 if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
-  if [ -z "${ALERT_EMAIL}" ] || [ -z "${SMTP_HOST}" ]; then
-    log "警告: ENABLE_TRAFFIC_ALERT=true だが ALERT_EMAIL/SMTP_HOST 未設定。通知は送られません"
+  if [ -z "${ALERT_EMAIL}" ]; then
+    log "警告: ENABLE_TRAFFIC_ALERT=true だが ALERT_EMAIL 未設定。通知は送られません"
+  elif [ "${SMTP_MODE}" != "local" ] && [ -z "${SMTP_HOST}" ]; then
+    log "警告: relay モードだが SMTP_HOST 未設定。通知は送られません（make configure-alerts で設定）"
   fi
 
   # MTA 導入（モード依存）。relay は msmtp、local は dma（待受なし・直接配送）。
