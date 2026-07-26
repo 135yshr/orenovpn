@@ -27,6 +27,14 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | 新規 VPN 接続 | `wg show latest-handshakes` / `swanctl --list-sas` を前回と差分 | ほぼゼロ |
 | 不審な出口通信 | ipset(`orenovpn_blocklist`) + before.rules の LOG で FORWARD を検知（ログのみ・ドロップしない） | 中 |
 | トラフィック量の異常 | 転送バイトの前回比増分を閾値判定 | ほぼゼロ |
+| **資格情報の複製** | 同一のピア公開鍵 / 証明書 ID が直近 1 時間に複数の接続元 IP から使われたら警告 | ほぼゼロ |
+
+> 「新規 VPN 接続」は**未知の鍵**しか見ません。設定ファイルやプロファイルを丸ごと
+> 複製されると、正規の鍵で接続されるため peer 一覧は増えず、この検知には掛かりません。
+> 「資格情報の複製」検知（`ALERT_PEER_IP_THRESHOLD`、既定 3 IP/1時間）がその穴を埋めます。
+> 回線切替の多い端末で誤検知が続く場合は、サーバーの `/etc/orenovpn/orenovpn.env` に
+> `ALERT_PEER_IP_THRESHOLD="5"` のように書いて閾値を上げてください（`make setup` で
+> 上書きされない独立キーです）。
 
 ## 設定（terraform.tfvars）
 
@@ -109,7 +117,10 @@ make configure-alerts
 ## 検知の内部動作（watch.sh）
 
 - 状態は `/var/lib/orenovpn/watch/` に保存（`last_run`・`wg_active_peers`・`traffic_bytes`・
-  `cooldown/<key>`）。
+  `identity_ips`・`cooldown/<key>`）。
+- 資格情報の複製検知は `identity_ips` に `時刻<TAB>識別子<TAB>接続元IP` を蓄積し、
+  1 時間より古い行を毎回捨てて「同一識別子あたりの異なる IP 数」を数える。識別子は
+  WireGuard がピア公開鍵、IKEv2 が証明書の ID（`swanctl --list-sas` の `remote '...'`）。
 - 各検知は独立し、1 つが失敗しても他は継続する。
 - 同種アラートは 1 時間クールダウン（`cooldown/<key>` の mtime で判定）し、5 分周期で同じ
   警告を送り続けない。

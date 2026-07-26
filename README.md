@@ -17,7 +17,8 @@ VPN 構成・初期クライアント作成までを自動化します（フェ�
 
 - 🚀 **ほぼ自動** — `make deploy`（VPS 作成）→ `make setup`（VPN 構成）の 2 ステップで完結
 - 📱 **2 方式を選択** — WireGuard（専用アプリ）／ IKEv2/IPsec（iPhone/macOS 標準VPN・アプリ不要）
-- 🔳 **QR で配布** — `make serve-profile` で iPhone に構成を QR 配布（Let's Encrypt の信頼された証明書）
+- 🔳 **QR で配布** — `make serve-profile` で iPhone に構成を QR 配布（Let's Encrypt の信頼された証明書 /
+  トークン一致・Host 一致・ダウンロード回数と時間の上限つき一時配信）
 - 🔧 **設定は 1 ファイル** — `terraform.tfvars` を編集するだけ。最小 4 項目で動く
 - 🔒 **セキュア既定値** — SSH 鍵認証のみ・root/パスワード無効・最小ファイアウォール・fail2ban・自動更新
 - 🩺 **自己診断＋CI** — `make doctor` で実機点検、`make check`／GitHub Actions で変更を自動検証
@@ -139,7 +140,7 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `wg_dns` | `1.1.1.1,1.0.0.1` | クライアント DNS |
 | `wg_clients` | `["client1"]` | 初期作成クライアント |
 | `randomize_profile_port` | `false` | QR 配布ポートを apply 時にランダム化 |
-| `enable_cert_revocation` | `false` | IKEv2 証明書の失効(CRL)を有効化（`make remove` で失効可能）|
+| `enable_cert_revocation` | `true` | IKEv2 証明書の失効(CRL)。`make remove` で実際に失効できる（**false にすると漏洩時に止められない**）|
 
 ---
 

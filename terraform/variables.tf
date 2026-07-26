@@ -257,14 +257,16 @@ variable "timezone" {
 
 variable "enable_cert_revocation" {
   description = <<-EOT
-    IKEv2 のクライアント証明書失効(CRL)を有効化する。true の場合、証明書は
+    IKEv2 のクライアント証明書失効(CRL)を有効化する。true（既定）の場合、証明書は
     openssl ca 経由で発行され CA データベースで追跡、`make remove NAME=x` で
-    実際に失効（strongSwan が CRL で拒否）できる。false（既定）ではローカル
-    ファイル削除のみで証明書は有効なまま。fail-open 運用のためロックアウトの
-    危険はない（失効した証明書のみ拒否）。WireGuard には影響しない。
+    実際に失効（strongSwan が CRL で拒否）できる。
+    false にするとローカルファイル削除のみで証明書は有効なまま残り、端末紛失や
+    プロファイル漏洩の際に**接続を止める手段が無くなる**（有効期間は 10 年）ため、
+    無効化は推奨しない。fail-open 運用なのでロックアウトの危険はない（失効した
+    証明書のみ拒否）。WireGuard には影響しない。
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 # -----------------------------------------------------------------------------

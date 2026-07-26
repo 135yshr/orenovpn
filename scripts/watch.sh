@@ -7,6 +7,9 @@
 #     (2) 新規 VPN 接続           … 未知ピアのハンドシェイク / 新規 IKE_SA 確立
 #     (3) 不審な出口通信          … 既知悪性 IP への通信（setup.sh の FORWARD ログ）
 #     (4) トラフィック量の異常    … 1 周期あたり転送量が閾値超過
+#     (5) 資格情報の複製          … 同じ鍵/証明書IDが短時間に複数の接続元 IP から使用
+#         ※ (2) は「未知の鍵」しか見ないため、設定ファイルを複製されて正規の鍵で
+#           接続された場合は検知できない。(5) がその穴を埋める。
 #   閾値超過・差分検出時に msmtp でメールを送る。同種アラートはクールダウンで抑制。
 #   設定は /etc/orenovpn/orenovpn.env（cloud-init 生成）から読む。
 #   状態は /var/lib/orenovpn/watch/ に保存し、前回との差分を判定する。
@@ -29,12 +32,17 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 : "${ALERT_TRAFFIC_MBYTES:=1024}"
 : "${ALERT_BLOCKLIST_URL:=}"
 : "${WG_PORT:=51820}"
+# 同一の鍵/証明書IDが 1 時間内にこの数以上の接続元 IP から使われたら警告する。
+# 回線切替の多い端末で誤検知が続く場合は orenovpn.env に値を書いて上げる。
+: "${ALERT_PEER_IP_THRESHOLD:=3}"
 
 WG_IFACE=wg0
 STATE_DIR=/var/lib/orenovpn/watch
 COOLDOWN_DIR="$STATE_DIR/cooldown"
 COOLDOWN_SECONDS=3600
 ACTIVE_WINDOW=900
+PEER_IP_WINDOW=3600
+TAB="$(printf '\t')"
 MSMTP_CONF=/etc/msmtprc
 HOST_LABEL="$(hostname 2>/dev/null || echo orenovpn)"
 
@@ -248,6 +256,69 @@ check_traffic() {
   printf '%s' "$cur" >"$prevfile"
 }
 
+# ---- (5) 資格情報の複製検知 -------------------------------------------------
+# 現在アクティブな「識別子 <TAB> 接続元IP」を列挙する。
+#   WireGuard … ピア公開鍵（設定ファイルを複製されても鍵は同じ）
+#   IKEv2     … クライアント証明書の ID（プロファイルを複製されても ID は同じ）
+collect_active_identities() {
+  if [ "$VPN_PROTOCOL" = "ikev2" ]; then
+    command -v swanctl >/dev/null 2>&1 || return 0
+    swanctl --list-sas 2>/dev/null \
+      | grep -oE "remote '[^']+' @ [0-9a-fA-F.:]+" \
+      | sed -E "s/^remote '([^']+)' @ (.+)$/\1${TAB}\2/"
+    return 0
+  fi
+  command -v wg >/dev/null 2>&1 || return 0
+  local now cutoff pk ep hs ip
+  now="$(date +%s)"
+  cutoff="$((now - ACTIVE_WINDOW))"
+  # wg show dump: 1行目はインターフェイス。ピア行は pubkey/psk/endpoint/allowed/handshake...
+  while read -r pk ep hs; do
+    [ -n "${pk:-}" ] || continue
+    [ "${ep:-(none)}" != "(none)" ] || continue
+    [ "${hs:-0}" -gt "$cutoff" ] 2>/dev/null || continue
+    ip="${ep%:*}"; ip="${ip#[}"; ip="${ip%]}"
+    printf '%s%s%s\n' "$pk" "$TAB" "$ip"
+  done < <(wg show "$WG_IFACE" dump 2>/dev/null | tail -n +2 | awk -F'\t' '{print $1, $3, $5}')
+}
+
+check_identity_ip_reuse() {
+  local now prune f tmp offenders
+  now="$(date +%s)"
+  prune="$((now - PEER_IP_WINDOW))"
+  f="$STATE_DIR/identity_ips"
+  tmp="${f}.cur"
+  : >"$tmp"
+  # 期限内の履歴を引き継ぐ
+  [ -f "$f" ] && awk -F'\t' -v p="$prune" '$1 ~ /^[0-9]+$/ && $1 + 0 >= p + 0' "$f" >>"$tmp"
+  while IFS="$TAB" read -r id ip; do
+    [ -n "${id:-}" ] && [ -n "${ip:-}" ] || continue
+    printf '%s%s%s%s%s\n' "$now" "$TAB" "$id" "$TAB" "$ip" >>"$tmp"
+  done < <(collect_active_identities)
+  # (識別子, IP) ごとに最新時刻だけ残して履歴を更新
+  awk -F'\t' '{k = $2 FS $3; if ($1 + 0 > t[k] + 0) t[k] = $1} END {for (k in t) print t[k] FS k}' \
+    "$tmp" | sort >"$f"
+  rm -f "$tmp"
+
+  offenders="$(awk -F'\t' -v th="$ALERT_PEER_IP_THRESHOLD" '
+    {c[$2]++; s[$2] = s[$2] " " $3}
+    END {for (i in c) if (c[i] + 0 >= th + 0) printf "  %s\n    接続元 %d 個:%s\n", i, c[i], s[i]}' "$f")"
+  if [ -n "$offenders" ]; then
+    alert "identity_reuse" \
+      "同一の VPN 資格情報が複数の接続元から使用（複製の疑い）" \
+      "1 つの鍵/証明書が直近 1 時間で ${ALERT_PEER_IP_THRESHOLD} 個以上の接続元 IP から使われました。
+設定ファイル/プロファイルが複製された可能性があります（正規の鍵で接続されるため
+「新規ピア」としては検知されません）。
+
+${offenders}
+  確認: sudo wg show ${WG_IFACE} / sudo swanctl --list-sas
+  対処: 該当クライアントを作り直す（make remove NAME=x && make client NAME=x）
+        IKEv2 は失効(CRL)が有効でないと止められません（make doctor で確認）
+  ※ 回線切替の多い端末では正常でも出ます。続く場合は orenovpn.env の
+     ALERT_PEER_IP_THRESHOLD を上げてください（現在 ${ALERT_PEER_IP_THRESHOLD}）。"
+  fi
+}
+
 # ---- テスト通知（make alerts-test / 手動確認用）----------------------------
 if [ "${1:-}" = "test" ]; then
   send_mail "テスト通知" "これは orenovpn watch のテスト通知です。このメールが届けば SMTP 設定は正常です。"
@@ -270,6 +341,7 @@ else
 fi
 check_egress "$SINCE" || logg "check_egress 失敗"
 check_traffic || logg "check_traffic 失敗"
+check_identity_ip_reuse || logg "check_identity_ip_reuse 失敗"
 
 date '+%Y-%m-%d %H:%M:%S' >"$STATE_DIR/last_run"
 logg "監視完了（protocol=${VPN_PROTOCOL}）"

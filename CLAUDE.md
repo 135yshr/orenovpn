@@ -50,6 +50,9 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 - **セキュリティグループのルールはインスタンス作成時に宣言しておく必要がある**。ConoHa は稼働中インスタンスに後から追加した SG ルールを反映しない。配信ポート等を後から開こうとしても効かない（`enable_profile_download` / `profile_port` が作成時に SG を決めているのはこのため）。
 - **`config_drive = true` は必須**。ConoHa では metadata サービス経由の user_data が cloud-init に適用されないことがあり、config-drive で確実に処理させている。
 - **サーバー内のファイアウォールは ufw に一本化**。`setup.sh` は Debian 既定の nftables を `systemctl disable --now` で無効化する（`table inet filter` の input policy drop が ufw より優先し VPN ポートを落とすため）。ファイアウォール周りを触るときはこの前提を崩さない。
+- **転送(FORWARD)を広く許可してはいけない**（セキュリティ不変条件）。`DEFAULT_FORWARD_POLICY` は必ず `DROP`、MASQUERADE には必ず `-s <VPN サブネット>`、FORWARD の許可は向き（`-i wg0 -o <WAN>`／`-m policy --pol ipsec`／確立済みの戻り）まで限定する。過去に `-o wg0 -j ACCEPT` と `DEFAULT_FORWARD_POLICY=ACCEPT` を使っていたため、**VPN 認証なしで外部からトンネル内へ到達でき、サーバーが第三者通信の中継にもなっていた**。`make doctor` がこの退行を検出する。
+- **`serve-profile.sh` の配信ハンドラに `SimpleHTTPRequestHandler` を使ってはいけない**（セキュリティ不変条件）。index の無いディレクトリに autoindex を返すため、「推測不能な URL トークン」が列挙され防御が消える。配布物は VPN 資格情報そのもの（IKEv2 の `.mobileconfig` は p12 の復号パスワードを平文で含む）なので、トークン完全一致・Host 一致・回数上限・時間上限・サーバー側 watchdog による強制クローズ・`/var/log/orenovpn-serve.log` への記録をすべて維持する。`/tmp` へ配布物を複製しない（root 専有パスから直接読む）。
+- **IKEv2 の証明書失効(CRL)は既定 ON**（`enable_cert_revocation = true`）。OFF にすると `make remove` が「ファイル削除だけ」になり、漏洩した証明書を 10 年間止められない。`ikev2-client remove` は失効できなかった場合に証明書の原本を**残す**（消すと将来も失効できなくなる）。
 - **SSH は 22 番固定**（Debian の SSH ソケットアクティベーションでポート変更が反映されず接続不能になり得るため機能として持たない）。防御は鍵認証＋fail2ban＋`allowed_ssh_cidr`。
 - **`NAME` 引数のインジェクション対策**: Makefile は `NAME` をレシピ文字列に展開せず `export NAME` で環境変数として渡し、`NAMECHECK`（英数・ハイフン・アンダースコアのみ）で検証してから `$$NAME` を参照する。クライアント名を扱う新ターゲットでも必ず `@$(NAMECHECK)` を冒頭に置き、同じ方式を守る。
 - OS は cloud-init + apt 前提のため **Debian / Ubuntu 系のみ**（RHEL 系不可）。512MB プランでは `setup.sh` が apt のメモリ不足を防ぐため swap を確保する。

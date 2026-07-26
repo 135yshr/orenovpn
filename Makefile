@@ -117,11 +117,15 @@ serve-profile: ## VPSから一時HTTPS+QRで配信(iPhoneのSafariで取得)  �
 
 profile: ## 構成ファイルを手元にDL(iOSはAirDropで転送)  例: make profile NAME=iphone
 	@$(NAMECHECK)
-	@$(SSH) "sudo cat /etc/orenovpn/clients/$$NAME.mobileconfig 2>/dev/null || sudo cat /etc/orenovpn/clients/$$NAME.conf 2>/dev/null" > "$$NAME.download"; \
+	@umask 077; $(SSH) "sudo cat /etc/orenovpn/clients/$$NAME.mobileconfig 2>/dev/null || sudo cat /etc/orenovpn/clients/$$NAME.conf 2>/dev/null" > "$$NAME.download"; \
 	if [ ! -s "$$NAME.download" ]; then echo "取得失敗: クライアント '$$NAME' が見つかりません（make clients で確認）"; rm -f "$$NAME.download"; exit 1; fi; \
 	if head -1 "$$NAME.download" | grep -qi xml; then mv "$$NAME.download" "$$NAME.mobileconfig"; f="$$NAME.mobileconfig"; else mv "$$NAME.download" "$$NAME.conf"; f="$$NAME.conf"; fi; \
-	echo "保存しました: ./$$f"; \
-	echo "→ iPhoneへ: Finderで $$f を右クリック → 共有 → AirDrop で iPhone を選択"
+	chmod 600 "$$f"; \
+	echo "保存しました: ./$$f （0600。VPN 資格情報そのものなので取り扱い注意）"; \
+	echo "→ iPhoneへ: Finderで $$f を右クリック → 共有 → AirDrop で iPhone を選択"; \
+	echo "⚠️ メール/クラウド経由で渡さないこと（IKEv2 は .mobileconfig 内に p12 の"; \
+	echo "   復号パスワードが平文で入っており、渡した先の履歴に残った時点で漏洩です）。"; \
+	echo "   端末へ入れたら手元のファイルは削除してください: rm $$f"
 
 remove: ## クライアントを削除   例: make remove NAME=my-phone
 	@$(NAMECHECK)

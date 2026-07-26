@@ -62,9 +62,14 @@ make client  NAME=iphone         # クライアント作成（初回のみ）
 make profile NAME=iphone         # Mac のカレントディレクトリに iphone.mobileconfig を保存
 ```
 
+> ⚠️ `.mobileconfig` は**それ自体が VPN の資格情報**です。クライアント証明書(p12)と
+> **その復号パスワードが同じファイルに平文で**入っているため、渡した経路（メール・
+> クラウド・チャットの履歴）に残った時点で漏洩と同じ扱いになります。取り扱いは
+> 秘密鍵と同等にしてください。
+
 > `.mobileconfig` はサーバー上に root 所有で置かれます。取得方法は2通り:
 > - **A. QR で iPhone に直接**（`make serve-profile`）… 下記
-> - **B. Mac に落として転送**（`make profile` → AirDrop/メール/iCloud）… その下
+> - **B. Mac に落として転送**（`make profile` → AirDrop）… その下
 
 ### 1-A. QR で iPhone に直接取得（`make serve-profile`）
 
@@ -74,28 +79,54 @@ make serve-profile NAME=iphone     # 一時HTTPS配信 + QR をターミナル�
 ```
 
 1. ターミナルに QR が出る → iPhone の**カメラで撮る** → Safari が開く
-2. 自己署名のため警告 →「詳細を表示」→「このWebサイトにアクセス」
-3. `.mobileconfig` DL →「設定」→ プロファイルをインストール
-4. 取得できたら `Ctrl-C`（一定時間で自動停止・ufwも自動で閉じる）
+2. `.mobileconfig` DL →「設定」→ プロファイルをインストール
+   （Let's Encrypt 証明書が取れなかった場合のみ警告 →「詳細を表示」→「このWebサイトにアクセス」）
+3. 取得できたら `Ctrl-C`（ダウンロード完了・時間経過でも自動停止し ufw も閉じる）
+
+配信は資格情報を公開ポートに置く操作なので、次の多層で守っています:
+
+| 防御 | 内容 |
+|---|---|
+| トークン一致のみ応答 | URL のトークンが完全一致しないパスは 404。**ディレクトリ一覧は返さない** |
+| Host ヘッダ検査 | 配信ホスト名（`<IP>.sslip.io` または `PROFILE_DOMAIN`）以外は 404。IP 直打ちのスキャンを弾く |
+| ダウンロード回数上限 | 既定 2 回で自動停止（`SERVE_MAX_DOWNLOADS` で変更）。到達確認は HEAD なので消費しない |
+| 時間上限 | 既定 180 秒（`SERVE_SECONDS`）。サーバー側 watchdog が ufw も必ず閉じる（手元の Ctrl-C や回線状態に依存しない） |
+| 複製しない | 配布物は `/etc/orenovpn/clients/`（root のみ）から直接読む。`/tmp` へコピーしない |
+| 証跡 | 許可/拒否をすべて `/var/log/orenovpn-serve.log` に記録 |
+
+```bash
+# 配信中に誰が叩いてきたかを確認（別ターミナルから）
+make ssh
+sudo tail -n 50 /var/log/orenovpn-serve.log   # DENY host-mismatch などが並ぶのは通常のスキャン
+```
 
 > 配信ポート（既定443）は Terraform で**作成時に SG へ宣言**してあります
 > （ConoHa は後付け SG ルールを稼働中インスタンスに反映しないため）。
 > 待ち受けるのは `make serve-profile` 実行中のみで、それ以外は接続拒否されます。
+>
+> なお Let's Encrypt 証明書を取得すると、そのホスト名は **Certificate Transparency
+> ログに即時公開**されます（＝配信の開始が第三者から観測可能）。上のトークン一致・
+> Host 検査・回数上限は、この前提のうえで必須の防御です。既知ポートを避けたい場合は
+> `randomize_profile_port = true`、独自ドメインを使う場合は `PROFILE_DOMAIN` を指定します。
 
 ### 1-B. Mac に落として渡す（`make profile`）
 
 QR を使わない/使えない場合。`.mobileconfig` を Mac にダウンロードしてから転送します。
 
 ```bash
-make profile NAME=iphone           # ./iphone.mobileconfig を保存
+make profile NAME=iphone           # ./iphone.mobileconfig を 0600 で保存
 ```
+
+**AirDrop（端末間で直接渡る）を使ってください。** メール・クラウドストレージ・チャットは
+履歴に資格情報が残るため避けます。端末へインストールしたら手元のファイルは削除します
+（`rm iphone.mobileconfig`）。
 
 ### 2. iPhone へ渡してインストール
 
 Mac に保存された `iphone.mobileconfig` を iPhone へ転送します（いずれか）:
 
-- **AirDrop（最も簡単）**: Finder で `iphone.mobileconfig` を右クリック →「共有」→「AirDrop」→ iPhone を選択
-- メール / iCloud Drive に置いて iPhone で開く
+- **AirDrop（推奨）**: Finder で `iphone.mobileconfig` を右クリック →「共有」→「AirDrop」→ iPhone を選択
+- メール / iCloud Drive 経由は**非推奨**（資格情報が送信履歴やクラウドに残り、後から回収できない）
 
 iPhone 側:
 1. 受け取った `.mobileconfig` を開く →「設定」に「プロファイルがダウンロードされました」

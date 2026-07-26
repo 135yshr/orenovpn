@@ -17,8 +17,12 @@ log() { echo "[orenovpn] $*"; }
 die() { echo "[orenovpn] エラー: $*" >&2; exit 1; }
 
 VPN_PROTOCOL="${VPN_PROTOCOL:-wireguard}"
-# 証明書失効(CRL)を有効化するか（IKEv2のみ）。未設定の既存インスタンスは false 扱い。
-ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-false}"
+# 証明書失効(CRL)を有効化するか（IKEv2のみ）。既定は true。
+#   漏洩・端末紛失時に接続を止められないのは事故なので、既定で失効可能にしておく。
+#   未設定の既存インスタンスでも true 扱いにして CA DB / CRL を用意する（fail-open の
+#   ため既存クライアントはロックアウトされないが、失効有効化より前に発行した証明書は
+#   CA DB 未登録のため失効できない = 作り直しが必要）。
+ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-true}"
 : "${ENABLE_TRAFFIC_ALERT:=false}"
 : "${ALERT_EMAIL:=}"
 : "${SMTP_HOST:=}"
@@ -359,17 +363,22 @@ setup_wireguard() {
   local SERVER_PRIV; SERVER_PRIV="$(cat /etc/wireguard/server_private.key)"
   local V4_PREFIX="${WG_SUBNET_V4##*/}"
   local ADDRESS_LINE="${WG_ADDRESS_V4}/${V4_PREFIX}"
-  local POSTUP="iptables -I FORWARD 1 -i %i -j ACCEPT; iptables -I FORWARD 1 -o %i -j ACCEPT; iptables -t nat -I POSTROUTING 1 -o ${WAN_IF} -j MASQUERADE"
-  local POSTDOWN="iptables -D FORWARD -i %i -j ACCEPT; iptables -D FORWARD -o %i -j ACCEPT; iptables -t nat -D POSTROUTING -o ${WAN_IF} -j MASQUERADE"
+  # 転送ルールは「トンネル→外」「トンネル内同士」「確立済みの戻り」だけに限定する。
+  #   旧実装は `-o %i -j ACCEPT` を FORWARD の先頭（ufw のチェーンより前）に置き、
+  #   MASQUERADE も -s 無しだったため、外部から「宛先=VPN サブネット」のパケットが
+  #   VPN 認証なしにトンネルへ転送され、戻りまで NAT されて成立していた。
+  local POSTUP="iptables -I FORWARD 1 -i %i -o ${WAN_IF} -j ACCEPT; iptables -I FORWARD 2 -i %i -o %i -j ACCEPT; iptables -I FORWARD 3 -i ${WAN_IF} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; iptables -t nat -I POSTROUTING 1 -s ${WG_SUBNET_V4} -o ${WAN_IF} -j MASQUERADE"
+  local POSTDOWN="iptables -D FORWARD -i %i -o ${WAN_IF} -j ACCEPT; iptables -D FORWARD -i %i -o %i -j ACCEPT; iptables -D FORWARD -i ${WAN_IF} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; iptables -t nat -D POSTROUTING -s ${WG_SUBNET_V4} -o ${WAN_IF} -j MASQUERADE"
   if [ "${WG_ENABLE_IPV6}" = "true" ]; then
     local V6_PREFIX="${WG_SUBNET_V6##*/}"
     ADDRESS_LINE="${ADDRESS_LINE}, ${WG_ADDRESS_V6}/${V6_PREFIX}"
-    POSTUP="${POSTUP}; ip6tables -I FORWARD 1 -i %i -j ACCEPT; ip6tables -I FORWARD 1 -o %i -j ACCEPT; ip6tables -t nat -I POSTROUTING 1 -o ${WAN_IF} -j MASQUERADE"
-    POSTDOWN="${POSTDOWN}; ip6tables -D FORWARD -i %i -j ACCEPT; ip6tables -D FORWARD -o %i -j ACCEPT; ip6tables -t nat -D POSTROUTING -o ${WAN_IF} -j MASQUERADE"
+    POSTUP="${POSTUP}; ip6tables -I FORWARD 1 -i %i -o ${WAN_IF} -j ACCEPT; ip6tables -I FORWARD 2 -i %i -o %i -j ACCEPT; ip6tables -I FORWARD 3 -i ${WAN_IF} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; ip6tables -t nat -I POSTROUTING 1 -s ${WG_SUBNET_V6} -o ${WAN_IF} -j MASQUERADE"
+    POSTDOWN="${POSTDOWN}; ip6tables -D FORWARD -i %i -o ${WAN_IF} -j ACCEPT; ip6tables -D FORWARD -i %i -o %i -j ACCEPT; ip6tables -D FORWARD -i ${WAN_IF} -o %i -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT; ip6tables -t nat -D POSTROUTING -s ${WG_SUBNET_V6} -o ${WAN_IF} -j MASQUERADE"
   fi
   if [ ! -f "$WG_CONF" ]; then
     cat > "$WG_CONF" <<EOF
 # orenovpn WireGuard サーバー設定（クライアントは 'vpn-client' で管理）
+# orenovpn-fw-v2: 転送/NAT を VPN サブネットと方向で限定（緩いルールへ戻さないこと）
 [Interface]
 Address = ${ADDRESS_LINE}
 ListenPort = ${WG_PORT}
@@ -379,6 +388,23 @@ PostDown = ${POSTDOWN}
 EOF
     chmod 600 "$WG_CONF"
     log "wg0.conf を生成"
+  elif ! grep -qF 'orenovpn-fw-v2' "$WG_CONF"; then
+    # 既存インスタンスの移行: 旧い全許可ルールを実チェーンから外してから書き換える。
+    # （先に conf を書き換えると PostDown が新ルール用になり、旧ルールが残る）
+    log "既存 wg0.conf の転送/NAT ルールを更新（外部からトンネルへ入れる緩いルールを撤去）"
+    systemctl stop "wg-quick@${WG_IF}" >/dev/null 2>&1 || true
+    # 同一ルールが重複登録されている可能性があるため複数回消す
+    for _ in 1 2 3 4 5; do
+      iptables -D FORWARD -i "$WG_IF" -j ACCEPT >/dev/null 2>&1 || true
+      iptables -D FORWARD -o "$WG_IF" -j ACCEPT >/dev/null 2>&1 || true
+      iptables -t nat -D POSTROUTING -o "${WAN_IF}" -j MASQUERADE >/dev/null 2>&1 || true
+      ip6tables -D FORWARD -i "$WG_IF" -j ACCEPT >/dev/null 2>&1 || true
+      ip6tables -D FORWARD -o "$WG_IF" -j ACCEPT >/dev/null 2>&1 || true
+      ip6tables -t nat -D POSTROUTING -o "${WAN_IF}" -j MASQUERADE >/dev/null 2>&1 || true
+    done
+    sed -i -e '/^PostUp *=/d' -e '/^PostDown *=/d' -e '/^# orenovpn-fw-v2/d' "$WG_CONF"
+    sed -i "/^ListenPort *=/a PostUp = ${POSTUP}\nPostDown = ${POSTDOWN}\n# orenovpn-fw-v2: 転送/NAT を VPN サブネットと方向で限定（緩いルールへ戻さないこと）" "$WG_CONF"
+    chmod 600 "$WG_CONF"
   fi
   systemctl enable --now "wg-quick@${WG_IF}"
   log "WireGuard を起動"
@@ -567,7 +593,52 @@ apply_ikev2_nat() {
     } > "$tmp6"
     mv "$tmp6" /etc/ufw/before6.rules
   fi
-  sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="ACCEPT"/' /etc/default/ufw
+
+  # 転送は「IPsec SA を通ってきた VPN サブネット発」と「その戻り」だけを許可する。
+  #   旧実装は DEFAULT_FORWARD_POLICY="ACCEPT" にしていたため、VPN と無関係な
+  #   パケットまで無条件に転送する＝オープンルーター（踏み台/リフレクタ）だった。
+  #   平文で届いた「宛先=VPN サブネット」も転送してしまうため、-m policy で
+  #   「IPsec で入ってきたか」を必ず確認する。
+  apply_ipsec_forward_rules
+}
+
+# IPsec 用の転送許可を ufw の before.rules / before6.rules へ冪等に追記する。
+# xt_policy が使えるかを実チェーンで検証してから書く（使えない環境で書くと
+# iptables-restore が失敗し、ufw ごと有効化できなくなるため）。
+apply_ipsec_forward_rules() {
+  local ipt fam file subnet in_rule out_rule chain=orenovpn-fwtest
+  for fam in v4 v6; do
+    if [ "$fam" = v4 ]; then
+      ipt=iptables; file=/etc/ufw/before.rules;  subnet="${WG_SUBNET_V4}"
+    else
+      [ "${WG_ENABLE_IPV6}" = "true" ] || continue
+      ipt=ip6tables; file=/etc/ufw/before6.rules; subnet="${WG_SUBNET_V6}"
+    fi
+    [ -f "$file" ] || continue
+    grep -q 'orenovpn-vpn-forward' "$file" && continue
+
+    # xt_policy の可用性テスト（一時チェーンに実際に入れてみる）
+    local policy_ok=0
+    "$ipt" -N "$chain" >/dev/null 2>&1 || true
+    if "$ipt" -A "$chain" -s "$subnet" -m policy --dir in --pol ipsec -j ACCEPT >/dev/null 2>&1; then
+      policy_ok=1
+    fi
+    "$ipt" -F "$chain" >/dev/null 2>&1 || true
+    "$ipt" -X "$chain" >/dev/null 2>&1 || true
+
+    if [ "$policy_ok" = 1 ]; then
+      in_rule="-A ufw-before-forward -s ${subnet} -m policy --dir in --pol ipsec -m comment --comment orenovpn-vpn-forward -j ACCEPT"
+      out_rule="-A ufw-before-forward -d ${subnet} -m policy --dir out --pol ipsec -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment orenovpn-vpn-forward -j ACCEPT"
+    else
+      # xt_policy 不在時の代替: 送信元/宛先を VPN サブネットに限定する（IPsec 経由か
+      # までは確認できないので、rp_filter と併せた弱い防御になる点は doctor が警告する）。
+      log "警告: xt_policy が使えないため IPsec 判定なしの転送ルールにフォールバック（make doctor を確認）"
+      in_rule="-A ufw-before-forward -s ${subnet} -m comment --comment orenovpn-vpn-forward -j ACCEPT"
+      out_rule="-A ufw-before-forward -d ${subnet} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment orenovpn-vpn-forward -j ACCEPT"
+    fi
+    sed -i "/^:ufw-before-forward /a ${in_rule}\n${out_rule}" "$file"
+    log "IPsec 転送許可を ${file} に追記（VPN サブネット ${subnet} のみ）"
+  done
 }
 
 case "$VPN_PROTOCOL" in
@@ -581,6 +652,9 @@ esac
 ufw --force reset >/dev/null
 ufw default deny incoming
 ufw default allow outgoing
+# 転送の既定は DROP。VPN に必要な転送だけを明示的に許可する（WireGuard は wg0.conf の
+# PostUp、IKEv2 は apply_ipsec_forward_rules）。ACCEPT にするとオープンルーターになる。
+sed -i 's/^DEFAULT_FORWARD_POLICY=.*/DEFAULT_FORWARD_POLICY="DROP"/' /etc/default/ufw
 ufw allow "${SSH_PORT}/tcp" comment 'SSH'
 case "$VPN_PROTOCOL" in
   wireguard) ufw allow "${WG_PORT}/udp" comment 'WireGuard' ;;
@@ -592,6 +666,16 @@ ufw --force enable
 log "ufw を有効化"
 # NAT は enable 前に before.rules へ適用済みのため、ここでの reload は不要
 # （reload すると同一 MASQUERADE ルールが二重登録される）。
+# ただし WireGuard の転送/NAT は wg0.conf の PostUp が入れており、直前の
+# `ufw --force reset` / `enable` で FORWARD が作り直されると消えてしまう。
+# 最後に wg-quick を再起動して、限定済みのルールを確実に載せ直す。
+if [ "$VPN_PROTOCOL" = "wireguard" ]; then
+  if systemctl restart wg-quick@wg0 >/dev/null 2>&1; then
+    log "wg-quick を再起動し転送/NAT ルールを再適用"
+  else
+    log "警告: wg-quick@wg0 の再起動に失敗（make doctor で転送/NAT を確認）"
+  fi
+fi
 
 # -----------------------------------------------------------------------------
 # 6. fail2ban / 自動更新（共通）

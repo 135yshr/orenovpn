@@ -33,6 +33,35 @@ else
 fi
 if $S ufw status 2>/dev/null | grep -q "Status: active"; then pass "ufw 稼働中"; else wrn "ufw が非稼働"; fi
 
+# 1.5 転送の限定（踏み台化・外部から VPN 内への侵入の点検）
+FWD="$($S grep -E '^DEFAULT_FORWARD_POLICY=' /etc/default/ufw 2>/dev/null | cut -d'"' -f2)"
+if [ "$FWD" = "ACCEPT" ]; then
+  bad "ufw の転送既定が ACCEPT（VPN 以外の通信まで中継＝踏み台/リフレクタ化）→ sudo /usr/local/sbin/setup.sh"
+else
+  pass "転送既定は ${FWD:-DROP}（VPN 用の転送のみ明示許可）"
+fi
+if $S iptables -t nat -S POSTROUTING 2>/dev/null | grep -q -- '-j MASQUERADE'; then
+  if $S iptables -t nat -S POSTROUTING 2>/dev/null | grep -- '-j MASQUERADE' | grep -qv -- '-s '; then
+    wrn "送信元指定の無い MASQUERADE がある（VPN 以外の転送も NAT される）→ sudo /usr/local/sbin/setup.sh"
+  else
+    pass "MASQUERADE は VPN サブネット限定"
+  fi
+fi
+
+# 1.7 構成ファイル配信（make serve-profile）の後片付け点検
+#     配布物は VPN 資格情報そのもの。開いたままのポートや残存ファイルは即リスク。
+if $S test -d /run/orenovpn-serve || $S test -d /tmp/orenovpn-serve; then
+  wrn "配信用の一時ディレクトリが残存（クライアント設定が置かれた可能性）→ sudo rm -rf /run/orenovpn-serve /tmp/orenovpn-serve"
+fi
+if ! $S pgrep -f 'orenovpn-serve/serve.py' >/dev/null 2>&1; then
+  STRAY="$($S ufw status 2>/dev/null | awk '$1 ~ /\/tcp$/ && $1 !~ /^22\// {print $1}' | sort -u | tr '\n' ' ')"
+  if [ -n "$STRAY" ]; then
+    wrn "配信していないのに TCP 許可が残っている: ${STRAY}→ sudo ufw delete allow <port>/tcp"
+  else
+    pass "配信ポートは閉じている（SSH 以外の TCP 許可なし）"
+  fi
+fi
+
 # 2. IP 転送（VPN 中継に必須）
 if [ "$($S sysctl -n net.ipv4.ip_forward 2>/dev/null)" = "1" ]; then pass "IPv4 転送 有効"; else bad "IPv4 転送が無効（中継不可）"; fi
 if [ "$V6" = "true" ]; then
@@ -59,14 +88,34 @@ if [ "$PROTO" = "ikev2" ]; then
   if [ "$V6" = "true" ]; then
     if $S swanctl --list-pools 2>/dev/null | grep -q orenovpn_pool6; then pass "IPv6 プール(orenovpn_pool6) あり"; else wrn "IPv6 プールが無い（v6 リークの恐れ）"; fi
   fi
-  if [ "$CRL" = "true" ]; then
-    if $S test -f /etc/swanctl/x509crl/orenovpn.crl; then pass "CRL 配置あり（失効チェック有効）"; else wrn "CRL 未配置（enable_cert_revocation の設定を確認）"; fi
+  if [ "$CRL" = "false" ]; then
+    bad "証明書失効(CRL)が無効: プロファイル漏洩・端末紛失時に接続を止められない（証明書は10年有効）→ enable_cert_revocation=true にして make setup"
+  elif $S test -f /etc/swanctl/x509crl/orenovpn.crl; then
+    pass "CRL 配置あり（失効チェック有効）"
+  else
+    wrn "CRL 未配置（make setup を再実行して生成してください）"
+  fi
+  # 外部から VPN サブネットへ入れる転送許可になっていないか
+  if $S iptables -S ufw-before-forward 2>/dev/null | grep -q 'orenovpn-vpn-forward'; then
+    if $S iptables -S ufw-before-forward 2>/dev/null | grep 'orenovpn-vpn-forward' | grep -q 'policy'; then
+      pass "IPsec 転送許可は policy 一致で限定（平文の外部パケットは転送しない）"
+    else
+      wrn "IPsec 転送許可が policy 一致なし（xt_policy 不在時の代替）。送信元偽装の余地が残る"
+    fi
+  else
+    bad "IPsec 用の転送許可ルールが無い（通信不可、または全開放）→ sudo /usr/local/sbin/setup.sh"
   fi
   active_sas="$($S swanctl --list-sas 2>/dev/null | grep -c ESTABLISHED)"
   echo "[INFO] 確立中の IKE_SA: ${active_sas:-0}"
 elif [ "$PROTO" = "wireguard" ]; then
   if $S wg show 2>/dev/null | grep -q interface; then pass "WireGuard(wg0) 稼働中"; else bad "WireGuard が非稼働 → systemctl status wg-quick@wg0"; fi
   if [ -n "$WGPORT" ] && $S ss -uln 2>/dev/null | grep -q ":${WGPORT} "; then pass "UDP ${WGPORT} LISTEN"; else bad "UDP ${WGPORT:-?} が LISTEN していない"; fi
+  # 外部から VPN 内へ到達できる緩い転送ルールが残っていないか
+  if $S iptables -S FORWARD 2>/dev/null | grep -qE '^-A FORWARD -o wg0 -j ACCEPT$'; then
+    bad "FORWARD に '-o wg0 -j ACCEPT' が残存（外部から VPN 内の端末へ到達可能）→ sudo /usr/local/sbin/setup.sh"
+  else
+    pass "外部から VPN 内へ入れる転送ルールなし"
+  fi
   peers="$($S wg show 2>/dev/null | grep -c peer)"
   echo "[INFO] 登録ピア数: ${peers:-0}"
 fi

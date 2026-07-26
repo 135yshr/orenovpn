@@ -49,7 +49,7 @@ enable_fail2ban     = true # SSH ブルートフォース対策
 enable_auto_updates = true # 自動セキュリティ更新
 # --- QR配布/失効の詳細（任意）---
 # randomize_profile_port = true # make serve-profile の配信ポートをランダム化
-# enable_cert_revocation = true # IKEv2証明書の失効(CRL)を有効化（make remove で失効可能）
+# enable_cert_revocation = true # IKEv2証明書の失効(CRL)。既定 true のまま推奨（false は漏洩時に接続を止められない）
 
 # --- ⑦ 通信監視・警告（怪しい通信をメール通知）------------------------------
 # 詳細は docs/ALERTING.md。smtp_password は state / orenovpn.env に平文保存される点に注意。
