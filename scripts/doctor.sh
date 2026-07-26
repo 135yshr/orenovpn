@@ -180,16 +180,27 @@ if [ "$DNSLOG" = "true" ]; then
   if $S systemctl is-active --quiet unbound 2>/dev/null; then pass "unbound 稼働中"; else bad "unbound が非稼働 → journalctl -u unbound"; fi
   SRVIP="$(getenv SERVER_IP)"
   L53="$($S ss -uln 2>/dev/null | awk 'NR > 1 && $5 ~ /:53$/ {print $5}' | sort -u | tr '\n' ' ')"
+  if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -qE 'dport 53 -j DNAT'; then
+    DNSDNAT=yes
+  else
+    DNSDNAT=no
+  fi
   if printf '%s' "$L53" | grep -qE '(^| )(0\.0\.0\.0|\*|\[::\]):53( |$)'; then
     bad "DNS が全アドレスで待受＝オープンリゾルバの恐れ: ${L53}→ sudo /usr/local/sbin/setup.sh"
   elif [ -n "$SRVIP" ] && printf '%s' "$L53" | grep -qF "${SRVIP}:53"; then
     bad "DNS がグローバル IP で待受＝オープンリゾルバ: ${L53}→ sudo /usr/local/sbin/setup.sh"
   elif [ -n "$L53" ]; then
     pass "DNS 待受は VPN 内/localhost のみ: ${L53}"
+  elif [ "$DNSDNAT" = yes ]; then
+    # DNAT だけ入って待受が無い＝クライアントの名前解決が全滅する状態
+    bad "53 番の待受が無いのに DNS の DNAT が入っている（クライアントの名前解決が全滅）
+       → journalctl -u unbound で原因を確認。応急処置は次の2つのいずれか:
+         sudo systemctl restart unbound && sudo systemctl restart orenovpn-fwlog
+         make configure-logging ACCESS_LOG=on DNS_LOG=off   # DNS 記録をやめる"
   else
     wrn "53 番の待受が無い（unbound の設定を確認）"
   fi
-  if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -qE 'dport 53 -j DNAT'; then
+  if [ "$DNSDNAT" = yes ]; then
     pass "DNS 強制転送(DNAT) 設定あり"
   else
     wrn "DNS の DNAT が無い（端末が別のリゾルバを使うと名前が記録されない）"

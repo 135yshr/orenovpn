@@ -52,6 +52,9 @@ grep -vE "^(ENABLE_ACCESS_LOG|ENABLE_DNS_LOGGING|LOG_RETENTION_DAYS)=" "$ENVF" >
 cat "$frag" >> "$new"
 install -m 600 -o root -g root "$new" "$ENVF"
 rm -f "$new" "$frag"
+# umask を戻してから setup.sh を呼ぶ（077 のままだと setup.sh が作るファイルの
+# モードが変わり、root 以外が読む必要のあるものが壊れる）
+umask 022
 /usr/local/sbin/setup.sh
 '
 # shellcheck disable=SC2086

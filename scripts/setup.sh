@@ -67,13 +67,17 @@ if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
 
   if [ "${SMTP_MODE}" = "local" ]; then
     # dma: smarthost 未設定＝直接配送。待受なしのため中継リスクなし。
-    mkdir -p /etc/dma
+    # ディレクトリとファイルのモードは明示する。dma は root 以外からも投函でき、
+    # 設定が読めないと "can not open config: Permission denied" で送信できない
+    # （呼び出し元の umask に依存させると 0700/0600 になり壊れる）。
+    install -d -m 0755 -o root -g root /etc/dma
     {
       echo "# orenovpn が生成。SMARTHOST 未設定＝宛先MXへ直接配送。"
       echo "# dma は待受ソケットを持たず、ローカル投函のみ処理する（中継しない）。"
       echo "MAILNAME $(hostname -f 2>/dev/null || hostname)"
     } >/etc/dma/dma.conf
-    chmod 644 /etc/dma/dma.conf
+    chmod 0644 /etc/dma/dma.conf
+    chown root:root /etc/dma/dma.conf
     log "ローカル MTA(dma) を構成（直接配送・中継なし・localhost のみ）"
   else
     # msmtp 送信設定（パスワードを含むため 0600 root:root）
@@ -416,6 +420,9 @@ EOF
     chmod 600 "$WG_CONF"
   fi
   systemctl enable --now "wg-quick@${WG_IF}"
+  # umask を戻す（戻さないと以降で作るディレクトリ/ファイルが 0700/0600 になり、
+  # root 以外が読む必要のあるもの（例: /etc/dma）が壊れる）
+  umask 022
   log "WireGuard を起動"
 }
 
@@ -575,6 +582,9 @@ EOF
   systemctl restart "$started"
   swanctl --load-all || die "swanctl --load-all に失敗しました（swanctl.conf/証明書を確認）"
   systemctl is-active --quiet "$started" || die "strongSwan が active になりません（journalctl -u strongswan を確認）"
+  # umask を戻す（戻さないと以降で作るディレクトリ/ファイルが 0700/0600 になり、
+  # root 以外が読む必要のあるもの（例: /etc/dma）が壊れる）
+  umask 022
   log "IKEv2/IPsec (strongSwan) 構成完了 サービス=${started}"
 }
 
@@ -775,12 +785,23 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 : "${WG_ADDRESS_V6:=fd42:66:66::1}"
 MODE="${1:-apply}"
 
-# unbound が動いていないのに DNS を DNAT すると、クライアントの名前解決が全滅する。
-# 記録より通信の維持を優先し、稼働確認できたときだけ DNAT を入れる。
-if [ "$ENABLE_DNS_LOGGING" = "true" ] && ! systemctl is-active --quiet unbound 2>/dev/null; then
-  echo "[fwlog] unbound が非稼働のため DNS 転送は入れません（名前解決を優先）" >&2
-  ENABLE_DNS_LOGGING=false
-fi
+# 待受が無いのに DNS を DNAT すると、クライアントの名前解決が全滅する。
+# unit が active でも bind に失敗していることがあるため、systemctl ではなく
+# 「実際に 53 番が開いているか」で判定する。記録より通信の維持を優先。
+dns_dnat_ok() { # $1 = DNAT 先アドレス（v6 は角括弧付き）
+  [ "$ENABLE_DNS_LOGGING" = "true" ] || return 1
+  if ! command -v ss >/dev/null 2>&1; then
+    systemctl is-active --quiet unbound 2>/dev/null && return 0
+    echo "[fwlog] ss が無く unbound も非稼働のため DNS 転送は入れません" >&2
+    return 1
+  fi
+  local listening
+  listening="$(ss -uln 2>/dev/null | awk 'NR > 1 {print $5}')"
+  printf '%s\n' "$listening" | grep -qxF "${1}:53" && return 0
+  printf '%s\n' "$listening" | grep -qxE '(0\.0\.0\.0|\*|\[::\]):53' && return 0
+  echo "[fwlog] ${1}:53 で待受が無いため DNS 転送は入れません（名前解決を優先）" >&2
+  return 1
+}
 
 ipt_for() { [ "$1" = v6 ] && echo ip6tables || echo iptables; }
 
@@ -814,7 +835,7 @@ for_each_rule() {
     if [ "$action" = del ] || [ "$ENABLE_ACCESS_LOG" = "true" ]; then
       "${action}_rule" "$fam" -s "$sub" -j LOG --log-prefix "orenovpn-dst: " --log-level 6
     fi
-    if [ "$action" = del ] || [ "$ENABLE_DNS_LOGGING" = "true" ]; then
+    if [ "$action" = del ] || dns_dnat_ok "$addr"; then
       "${action}_rule" "$fam" -s "$sub" -p udp --dport 53 -j DNAT --to-destination "${addr}:53"
       "${action}_rule" "$fam" -s "$sub" -p tcp --dport 53 -j DNAT --to-destination "${addr}:53"
     fi
