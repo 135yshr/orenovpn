@@ -69,6 +69,10 @@ smtp_password = "CHANGE_ME_APP_PASSWORD"
 # mail_from = "orenovpn@vpn.example.com" # 自分が管理するドメインのアドレス
 # alert_ssh_fail_threshold = 20
 # alert_traffic_mbytes     = 1024
+# SSH ログイン成功の通知（既定 ON のまま推奨。鍵が漏れた侵入は認証失敗を伴わないため、
+# 「失敗の急増」では気付けない。自分の作業でも届くので固定 IP は除外できる）
+# enable_ssh_login_alert     = true
+# alert_ssh_login_ignore_ips = ["203.0.113.5"]
 # 出口通信検知（悪性IPへの通信をログ＆メール通知。ログのみ・遮断はしない）
 # alert_blocklist_url = "https://example.com/malicious-ips.txt" # 1行1IP/CIDR
 

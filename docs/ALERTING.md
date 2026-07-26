@@ -24,6 +24,7 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | 対象 | 手段 | 負荷 |
 |------|------|------|
 | サーバーへの不審アクセス | `journalctl` の SSH 認証失敗数を集計し閾値判定 | ほぼゼロ |
+| **SSH ログイン成功** | `journalctl` の `Accepted ...` 行を前回実行時刻から拾い、成立したログインを毎回通知（既定 ON）| ほぼゼロ |
 | 新規 VPN 接続 | `wg show latest-handshakes` / `swanctl --list-sas` を前回と差分。接続が 0 件の状態も記録するため「未接続 → 接続」の遷移で通知される（1セッション1通・同種は1時間クールダウン）| ほぼゼロ |
 | 不審な出口通信 | ipset(`orenovpn_blocklist`) + `nat PREROUTING` の LOG で検知（ログのみ・ドロップしない）。**`-s <VPN サブネット>` で VPN 発に限定**し、リスト側も VPN サブネットを `nomatch` で除外する（公開リストは private 範囲を含むため、限定しないと戻り通信が全件一致して誤検知になる）| 中 |
 | トラフィック量の異常 | 転送バイトの前回比増分を閾値判定。WireGuard は `wg show transfer`、IKEv2 は `swanctl --list-sas` の CHILD_SA 転送量を合算（policy ベースの IPsec には `ipsec0` のようなインターフェイスが無いため）| ほぼゼロ |
@@ -36,6 +37,58 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 > `ALERT_PEER_IP_THRESHOLD="5"` のように書いて閾値を上げてください（`make setup` で
 > 上書きされない独立キーです）。
 
+## SSH ログイン成功の通知
+
+サーバー本体へ **SSH ログインが成功するたび**にメールが届きます（VPN への接続ではなく、
+管理者としてのログイン）。既定 ON で、`enable_traffic_alert = true`（＝監視機能全体）が
+前提です。
+
+**なぜ「失敗の急増」だけでは足りないか**: `alert_ssh_fail_threshold` が捉えるのは総当たりだけ
+です。SSH 秘密鍵が漏れた場合の侵入は**一発で成功する**ため認証失敗が 1 件も出ず、失敗側の
+監視には一切掛かりません。成功したログインの通知が、この経路に対する唯一の検知です。
+
+メール本文には時刻・ユーザー名・接続元 IP・接続元ポート・認証方式・鍵のフィンガープリント
+（`journalctl` の `Accepted` 行に出る範囲）が入ります。
+
+```text
+Subject: [orenovpn] SSH ログイン成功を検知（1 件）
+
+  2026-07-26T12:34:56+0900  admin@203.0.113.5:54321  publickey ssh2: ED25519 SHA256:AbCd/efg
+```
+
+### 動作の性質（承知しておくこと）
+
+- **最大 5 分遅れる**。監視 timer の周期でまとめて送るため、即時通知ではありません。
+- **自分の作業でも届く**。`make setup` / `make client` / `make doctor` など SSH を使う操作は
+  すべてログインなので通知されます。固定 IP から作業しているなら
+  `alert_ssh_login_ignore_ips`（サーバー側は `ALERT_SSH_LOGIN_IGNORE_IPS`）で除外できます。
+- **1 周期分をまとめて 1 通**。他のアラートと違い 1 時間クールダウンは掛けません（掛けると
+  2 回目以降のログインを取りこぼすため）。送信は 5 分あたり最大 1 通、本文の明細は 20 件
+  までで、超過分は「ほか N 件」と件数だけ示します。
+- 通知済みのログインは 1 時間ぶん `/var/lib/orenovpn/watch/ssh_logins_seen` に記録し、監視期間
+  の端が重なっても二重通知しません。
+
+### なぜ PAM（即時通知）ではないか
+
+`pam_exec` で SSH ログインの瞬間にメールを送る方式もありますが、**メール送信の遅延や失敗が
+SSH ログイン自体を遅延・失敗させうる**ため採用していません。SMTP が詰まったときに管理者が
+サーバーへ入れなくなる（＝復旧手段を失う）リスクは、通知が最大 5 分遅れる不便より重いという
+判断です。
+
+### 通知を止める / 除外する
+
+```bash
+make configure-alerts          # 対話で ON/OFF と除外 IP を設定（既存サーバー向け）
+```
+
+サーバー上で直接変える場合は `/etc/orenovpn/orenovpn.env` を編集します（`make setup` では
+上書きされない独立キーです）。
+
+```bash
+ENABLE_SSH_LOGIN_ALERT="false"                       # 通知を止める
+ALERT_SSH_LOGIN_IGNORE_IPS="203.0.113.5 198.51.100.9" # 特定の接続元だけ除外
+```
+
 ## 設定（terraform.tfvars）
 
 | 変数 | 既定 | 用途 |
@@ -47,6 +100,8 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | `smtp_mode` | `"relay"` | `"relay"`=外部 SMTP へ msmtp でリレー / `"local"`=VPN 上の `dma` が宛先 MX へ直接配送（外部 SMTP 不要・待受なし）|
 | `mail_from` | `""` | 差出人。空なら `alert_email` を使う。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）|
 | `alert_ssh_fail_threshold` | `20` | 1 周期あたり SSH 認証失敗の警告閾値 |
+| `enable_ssh_login_alert` | `true` | SSH ログイン**成功**の通知 |
+| `alert_ssh_login_ignore_ips` | `[]` | ログイン通知から除外する接続元 IP（完全一致） |
 | `alert_traffic_mbytes` | `1024` | 1 周期あたり転送量の警告閾値（MB） |
 | `alert_blocklist_url` | `""` | 悪性 IP ブロックリスト取得元（空＝出口検知 OFF） |
 
@@ -102,7 +157,7 @@ make configure-alerts
 
 選択に応じて、方式①②では `ALERT_EMAIL` / `SMTP_HOST` / `SMTP_PORT`、認証ありなら
 `SMTP_USER` / `SMTP_PASSWORD`、方式③では `ALERT_EMAIL` と任意の `MAIL_FROM`、いずれも
-最後に `ALERT_BLOCKLIST_URL` を入力すると、SSH でサーバーの env の該当キーだけを更新し、
+最後に SSH ログイン通知の ON/OFF（既定 ON）・除外 IP と `ALERT_BLOCKLIST_URL` を入力すると、SSH でサーバーの env の該当キーだけを更新し、
 `setup.sh` の `alerts` モードで監視を冪等に再構成する。**SMTP パスワードは Terraform state
 に残らず**、入力値はデータとしてサーバーへ渡す（シェルへ展開しないためインジェクションも
 回避）。反映後は `make alerts-test` で送信を確認できる。
@@ -217,7 +272,10 @@ DoH/DoT を使う端末ではドメイン名が残りません。TLS の ClientH
 ## 検知の内部動作（watch.sh）
 
 - 状態は `/var/lib/orenovpn/watch/` に保存（`last_run`・`wg_active_peers`・`traffic_bytes`・
-  `identity_ips`・`cooldown/<key>`）。
+  `identity_ips`・`ssh_logins_seen`・`cooldown/<key>`）。
+- SSH ログイン成功の検知は `journalctl -u ssh -u sshd -o short-iso` の `Accepted <方式> for
+  <ユーザー> from <IP> port <ポート>` を拾い、`時刻|ユーザー|IP|ポート` を鍵に
+  `ssh_logins_seen`（1 時間で失効）と突き合わせて未通知分だけを 1 通にまとめる。
 - 資格情報の複製検知は `identity_ips` に `時刻<TAB>識別子<TAB>接続元IP` を蓄積し、
   1 時間より古い行を毎回捨てて「同一識別子あたりの異なる IP 数」を数える。識別子は
   WireGuard がピア公開鍵、IKEv2 が証明書の ID（`swanctl --list-sas` の `remote '...'`）。
@@ -228,7 +286,7 @@ DoH/DoT を使う端末ではドメイン名が残りません。TLS の ClientH
 
 ## 段階的導入
 
-1. 軽量ログ監視 + メール通知（SSH 失敗・新規接続・トラフィック量）— **実装済み**。
+1. 軽量ログ監視 + メール通知（SSH 失敗・SSH ログイン成功・新規接続・トラフィック量）— **実装済み**。
    `enable_traffic_alert = true` と SMTP 設定で作動する。
 2. 出口通信検知 — **実装済み**。`alert_blocklist_url` に悪性 IP リストの URL を設定すると、
    段階1 の監視に加えて出口通信の検知が作動する。仕組みは次の通り:

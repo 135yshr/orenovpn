@@ -349,6 +349,23 @@ variable "alert_ssh_fail_threshold" {
   default     = 20
 }
 
+variable "enable_ssh_login_alert" {
+  description = <<-EOT
+    SSH ログイン**成功**をメールで通知する（enable_traffic_alert = true のときのみ動作）。
+    認証失敗の急増（alert_ssh_fail_threshold）は総当たりしか見えず、鍵が漏れた場合の
+    侵入は一発で成功して失敗が 1 件も出ないため、成功側の通知が侵入検知の本命になる。
+    自分の作業（make setup 等）でも届く。通知は 5 分周期でまとめて 1 通（最大 5 分遅延）。
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "alert_ssh_login_ignore_ips" {
+  description = "SSH ログイン通知から除外する接続元 IP（完全一致）。自分の固定 IP など"
+  type        = list(string)
+  default     = []
+}
+
 variable "alert_traffic_mbytes" {
   description = "警告を出す送信トラフィック量のしきい値（MB）"
   type        = number

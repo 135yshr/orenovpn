@@ -10,6 +10,9 @@
 #     (5) 資格情報の複製          … 同じ鍵/証明書IDが短時間に複数の接続元 IP から使用
 #         ※ (2) は「未知の鍵」しか見ないため、設定ファイルを複製されて正規の鍵で
 #           接続された場合は検知できない。(5) がその穴を埋める。
+#     (6) SSH ログイン成功        … サーバーへのログインが成立するたびに通知
+#         ※ (1) の裏返し。鍵が漏れた場合は失敗が 1 件も出ないため、侵入検知としては
+#           成功側の通知が本命になる。
 #   閾値超過・差分検出時に msmtp でメールを送る。同種アラートはクールダウンで抑制。
 #   設定は /etc/orenovpn/orenovpn.env（cloud-init 生成）から読む。
 #   状態は /var/lib/orenovpn/watch/ に保存し、前回との差分を判定する。
@@ -32,6 +35,11 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 : "${ALERT_TRAFFIC_MBYTES:=1024}"
 : "${ALERT_BLOCKLIST_URL:=}"
 : "${WG_PORT:=51820}"
+# SSH ログイン成功の通知。既定 ON（監視自体が ENABLE_TRAFFIC_ALERT で守られており、
+# 管理者しか SSH しない前提なので通数は微少）。うるさければ env で false にする。
+: "${ENABLE_SSH_LOGIN_ALERT:=true}"
+# 通知から除外する接続元 IP（空白またはカンマ区切り・完全一致）。監視系の踏み台など。
+: "${ALERT_SSH_LOGIN_IGNORE_IPS:=}"
 # 同一の鍵/証明書IDが 1 時間内にこの数以上の接続元 IP から使われたら警告する。
 # 回線切替の多い端末で誤検知が続く場合は orenovpn.env に値を書いて上げる。
 : "${ALERT_PEER_IP_THRESHOLD:=3}"
@@ -42,6 +50,8 @@ COOLDOWN_DIR="$STATE_DIR/cooldown"
 COOLDOWN_SECONDS=3600
 ACTIVE_WINDOW=900
 PEER_IP_WINDOW=3600
+SSH_LOGIN_WINDOW=3600
+SSH_LOGIN_MAX_LINES=20
 TAB="$(printf '\t')"
 MSMTP_CONF=/etc/msmtprc
 HOST_LABEL="$(hostname 2>/dev/null || echo orenovpn)"
@@ -141,6 +151,76 @@ check_ssh_fail() {
   期間: ${since} 〜 現在
   確認: sudo fail2ban-client status sshd"
   fi
+}
+
+# ---- (6) SSH ログイン成功の通知 --------------------------------------------
+# 認証失敗の急増(1) は総当たりしか見えない。鍵が漏れた場合の侵入は「一発で成功」する
+# ため失敗が 1 件も出ず、成功側を通知しないと気付けない。
+#
+# 実装上の判断:
+#   - PAM（pam_exec）で即時送信する方式は採らない。メール送信の遅延・失敗が SSH
+#     ログインそのものを遅延・失敗させうるため（最大 5 分遅れても締め出されない方を採る）。
+#   - alert() のクールダウンは通さない。同種 1 時間抑制だと 2 回目以降のログインを
+#     取りこぼす。代わりに 1 周期分をまとめて 1 通にするので、5 分あたり最大 1 通。
+ssh_login_ignored() {
+  local ip="$1"
+  case " ${ALERT_SSH_LOGIN_IGNORE_IPS//,/ } " in
+    *" $ip "*) return 0 ;;
+  esac
+  return 1
+}
+
+check_ssh_login() {
+  local since="$1" seen tmp now prune ts method user ip port extra key entries count
+  [ "$ENABLE_SSH_LOGIN_ALERT" = "true" ] || return 0
+  command -v journalctl >/dev/null 2>&1 || return 0
+  now="$(date +%s)"
+  prune="$((now - SSH_LOGIN_WINDOW))"
+  seen="$STATE_DIR/ssh_logins_seen"
+  tmp="${seen}.cur"
+  : >"$tmp"
+  # 期限内の通知済みログインを引き継ぐ。監視期間の端（last_run 記録前に発生した
+  # ログイン）が次回の期間と重なっても二重通知しないため。
+  if [ -f "$seen" ]; then
+    awk -F'\t' -v p="$prune" '$1 ~ /^[0-9]+$/ && $1 + 0 >= p + 0' "$seen" >>"$tmp"
+  fi
+
+  entries=""
+  count=0
+  while IFS="$TAB" read -r ts method user ip port extra; do
+    [ -n "${ip:-}" ] || continue
+    if ssh_login_ignored "$ip"; then continue; fi
+    # 時刻＋接続元ポートまで含めるので、同一ユーザーの複数ログインは別物として残る
+    key="${ts}|${user}|${ip}|${port}"
+    if grep -qF "${TAB}${key}" "$tmp"; then continue; fi
+    printf '%s%s%s\n' "$now" "$TAB" "$key" >>"$tmp"
+    count=$((count + 1))
+    if [ "$count" -le "$SSH_LOGIN_MAX_LINES" ]; then
+      entries="${entries}
+  ${ts}  ${user}@${ip}:${port}  ${method}${extra}"
+    fi
+  done < <(journalctl -u ssh -u sshd --since "$since" -o short-iso --no-pager 2>/dev/null \
+    | sed -nE "s/^([^ ]+) .*Accepted ([^ ]+) for ([^ ]+) from ([^ ]+) port ([0-9]+)( .*)?$/\1${TAB}\2${TAB}\3${TAB}\4${TAB}\5${TAB}\6/p")
+  mv "$tmp" "$seen"
+
+  [ "$count" -gt 0 ] || return 0
+  if [ "$count" -gt "$SSH_LOGIN_MAX_LINES" ]; then
+    entries="${entries}
+  ...ほか $((count - SSH_LOGIN_MAX_LINES)) 件"
+  fi
+  send_mail "SSH ログイン成功を検知（${count} 件）" \
+    "サーバーへの SSH ログインが成功しました。心当たりが無ければ SSH 鍵の漏洩を疑ってください
+（VPN への接続ではなく、サーバー本体へのログインです）。
+${entries}
+
+  確認: sudo journalctl -u ssh --since '${since}' | grep Accepted
+        last -a | head
+  対処: 鍵を作り直す（新しい公開鍵を ~/.ssh/authorized_keys へ入れ替え）
+        allowed_ssh_cidr で接続元を絞る / sudo fail2ban-client status sshd
+  ※ 自分の作業（make setup / make client 等）でも届きます。除外したい接続元があれば
+     /etc/orenovpn/orenovpn.env の ALERT_SSH_LOGIN_IGNORE_IPS に IP を並べてください
+     （現在: ${ALERT_SSH_LOGIN_IGNORE_IPS:-未設定}）。通知自体を止めるなら
+     ENABLE_SSH_LOGIN_ALERT=\"false\"。"
 }
 
 # ---- (2) 新規 VPN 接続（WireGuard）-----------------------------------------
@@ -356,6 +436,7 @@ fi
 SINCE="$(since_arg)"
 
 check_ssh_fail "$SINCE" || logg "check_ssh_fail 失敗"
+check_ssh_login "$SINCE" || logg "check_ssh_login 失敗"
 if [ "$VPN_PROTOCOL" = "ikev2" ]; then
   check_new_peers_ikev2 || logg "check_new_peers_ikev2 失敗"
 else

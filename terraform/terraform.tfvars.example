@@ -75,3 +75,6 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
 # smtp_user            = "you@example.com"
 # smtp_password        = "CHANGE_ME_APP_PASSWORD"
 # alert_blocklist_url  = "https://example.com/malicious-ips.txt" # 1行1IP/CIDR
+# SSH ログイン成功の通知（既定 ON。鍵が漏れた侵入は認証失敗が出ないため成功側で検知する）
+# enable_ssh_login_alert     = false                  # 通知が不要なら false
+# alert_ssh_login_ignore_ips = ["203.0.113.5"]        # 自分の固定 IP を除外

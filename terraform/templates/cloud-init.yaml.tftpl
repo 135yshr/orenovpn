@@ -50,6 +50,8 @@ write_files:
       SMTP_MODE="${smtp_mode}"
       MAIL_FROM="${mail_from}"
       ALERT_SSH_FAIL_THRESHOLD="${alert_ssh_fail_threshold}"
+      ENABLE_SSH_LOGIN_ALERT="${enable_ssh_login_alert}"
+      ALERT_SSH_LOGIN_IGNORE_IPS="${join(" ", alert_ssh_login_ignore_ips)}"
       ALERT_TRAFFIC_MBYTES="${alert_traffic_mbytes}"
       ALERT_BLOCKLIST_URL="${alert_blocklist_url}"
       ENABLE_ACCESS_LOG="${enable_access_log}"
