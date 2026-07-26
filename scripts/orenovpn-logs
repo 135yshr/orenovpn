@@ -66,9 +66,23 @@ show_access() {
     [ "${ENABLE_ACCESS_LOG}" = "true" ] || { echo "（宛先IP の記録は無効です）"; hint_enable; }
     return 0
   fi
+  # カーネルログの IPv6 は各グループが 4 桁 0 埋めで冗長なうえ、":ポート" を足すと
+  # アドレスの終わりが判別できない。先頭 0 を落として角括弧で囲む。
+  local awk_fmt='
+    function fmtaddr(a,   n, p, i, out) {
+      if (a !~ /:/) return a
+      n = split(a, p, ":")
+      out = ""
+      for (i = 1; i <= n; i++) {
+        sub(/^0+/, "", p[i])
+        if (p[i] == "") p[i] = "0"
+        out = out (i == 1 ? "" : ":") p[i]
+      }
+      return "[" out "]"
+    }'
   echo "== 直近の接続（最新 ${LINES} 件 / 過去 ${HOURS} 時間）=="
-  printf '%-25s %-18s %-40s %s\n' '時刻' '接続元(VPN内)' '宛先' 'プロトコル:ポート'
-  tail -n "$LINES" "$tmp" | awk '
+  printf '%-25s %-24s %-42s %s\n' '時刻' '接続元(VPN内)' '宛先' 'プロトコル:ポート'
+  tail -n "$LINES" "$tmp" | awk "${awk_fmt}"'
     {
       src = ""; dst = ""; proto = ""; dpt = ""
       for (i = 1; i <= NF; i++) {
@@ -77,11 +91,11 @@ show_access() {
         else if ($i ~ /^PROTO=/) proto = substr($i, 7)
         else if ($i ~ /^DPT=/)   dpt = substr($i, 5)
       }
-      printf "%-25s %-18s %-40s %s\n", $1, src, dst, proto (dpt == "" ? "" : ":" dpt)
+      printf "%-25s %-24s %-42s %s\n", $1, fmtaddr(src), fmtaddr(dst), proto (dpt == "" ? "" : ":" dpt)
     }'
   echo
   echo "== 宛先ごとの接続数（上位 ${TOP} / 過去 ${HOURS} 時間）=="
-  awk '
+  awk "${awk_fmt}"'
     {
       dst = ""; dpt = ""; src = ""
       for (i = 1; i <= NF; i++) {
@@ -90,11 +104,12 @@ show_access() {
         else if ($i ~ /^SRC=/) src = substr($i, 5)
       }
       if (dst == "") next
-      k = dst (dpt == "" ? "" : ":" dpt)
+      k = fmtaddr(dst) (dpt == "" ? "" : ":" dpt)
+      src = fmtaddr(src)
       c[k]++
       if (index(" " s[k] " ", " " src " ") == 0) s[k] = s[k] " " src
     }
-    END { for (k in c) printf "%6d  %-42s from%s\n", c[k], k, s[k] }' "$tmp" \
+    END { for (k in c) printf "%6d  %-46s from%s\n", c[k], k, s[k] }' "$tmp" \
     | sort -rn | head -n "$TOP"
   echo
   echo "全件: journalctl -k --since '${SINCE}' | grep orenovpn-dst"
