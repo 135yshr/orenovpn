@@ -152,6 +152,26 @@ ssh_public_key     = "ssh-ed25519 AAAAC3Nza... orenovpn"
 > `allowed_ssh_cidr` を**自分のグローバルIP**（`curl -4 ifconfig.co` で確認）に
 > 書き換えてください。
 
+### 任意で有効化する機能（監視・記録・失効）
+
+全変数は [`terraform.tfvars.example`](../terraform/terraform.tfvars.example) にコメント付きで
+並んでいます。よく使う任意機能は次の 3 つです。**いずれも作成時（cloud-init）に
+`orenovpn.env` へ書き込まれるため、既存サーバーへ後から入れる場合は専用コマンドを使います**
+（`main.tf` は `ignore_changes = [user_data]` のため、tfvars を変えても既存 VPS には届きません）。
+
+| 変数 | 既定 | 内容 | 既存サーバーへの反映 |
+|------|------|------|----------------------|
+| `enable_traffic_alert`<br>`alert_email` / `smtp_*` / `mail_from` | `false` | 怪しい通信（SSH 総当たり・新規接続・転送量急増・悪性IP・資格情報の複製）をメール通知。`smtp_mode = "local"` なら外部 SMTP 不要で VPN 上の `dma` が直接配送 | `make configure-alerts` |
+| `enable_access_log`<br>`enable_dns_logging` / `log_retention_days` | `false` | 接続先を記録（宛先IP・ポート／ドメイン名）。`make access-log` / `make dns-log` で参照。**URL は TLS 暗号化のため記録できません** | `make configure-logging ACCESS_LOG=on DNS_LOG=on` |
+| `enable_cert_revocation` | `true` | IKEv2 のクライアント証明書を `make remove` で実際に失効(CRL)できる。**false にすると漏洩時に接続を止められません**（証明書は10年有効） | `make setup`（再実行） |
+
+詳細と限界は [`ALERTING.md`](ALERTING.md)（監視・記録の設計／SNI が将来課題である理由／
+プライバシー）と [`SECURITY.md`](SECURITY.md)（資格情報のライフサイクル）を参照してください。
+
+> ⚠️ `make setup` は途中で VPN サービスを再起動します。**VPN に接続した端末から実行すると
+> SSH ごと切れて構成が中断する**ため、必ず VPN を切断してから実行してください
+> （setup.sh 側でも VPN 経由の実行を拒否します）。
+
 ### 使用可能な OS / バージョンの確認（重要）
 
 提供される OS とバージョンは時期で更新されます（例: 2026年時点で Debian は 13.5 / 12.5）。

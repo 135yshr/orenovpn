@@ -55,4 +55,23 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
 # enable_profile_download = true          # make serve-profile 用に配信ポートを SG へ宣言
 # profile_port            = 443           # 配信ポート（既定 443。IPv4v6-Web が 80/443 を開く）
 # randomize_profile_port  = true          # 配信ポートを apply 時にランダム(20000-60000)決定
-# enable_cert_revocation  = true          # IKEv2 証明書の失効(CRL)を有効化（make remove で失効可能）
+# enable_cert_revocation  = true          # IKEv2 証明書の失効(CRL)。既定 true（false は漏洩時に止められない）
+
+# --- アクセス先の記録（任意・既定 OFF。詳細は docs/ALERTING.md）--------------
+# URL は TLS 暗号化のため記録できない。残るのは宛先IP・ポート・ドメイン名まで。
+# enable_access_log       = true          # 接続先(宛先IP/ポート)を記録（make access-log）
+# enable_dns_logging      = true          # ドメイン名を記録（unbound を立てる。make dns-log）
+# log_retention_days      = 14            # 記録の保存日数（journald 上限 1G）
+
+# --- 通信監視・警告（任意。詳細は docs/ALERTING.md）-------------------------
+# enable_traffic_alert = true
+# alert_email          = "you@example.com"
+# 送信方式: relay=外部SMTPへリレー（既定）/ local=VPN上の dma が宛先MXへ直接配送
+# smtp_mode            = "local"
+# mail_from            = "orenovpn@vpn.example.com" # local では自ドメイン必須(SPF)
+# relay を使う場合のみ（smtp_password は state に平文で残る点に注意）:
+# smtp_host            = "smtp.gmail.com"
+# smtp_port            = 587
+# smtp_user            = "you@example.com"
+# smtp_password        = "CHANGE_ME_APP_PASSWORD"
+# alert_blocklist_url  = "https://example.com/malicious-ips.txt" # 1行1IP/CIDR

@@ -92,6 +92,9 @@ grep -vE "^(ENABLE_TRAFFIC_ALERT|SMTP_MODE|ALERT_EMAIL|MAIL_FROM|SMTP_HOST|SMTP_
 cat "$frag" >> "$new"
 install -m 600 -o root -g root "$new" "$ENVF"
 rm -f "$new" "$frag"
+# umask を戻してから setup.sh を呼ぶ（077 のままだと setup.sh が作る
+# /etc/dma 等が 0700 になり、dma が設定を読めず送信できなくなる）
+umask 022
 /usr/local/sbin/setup.sh alerts
 '
 # shellcheck disable=SC2086

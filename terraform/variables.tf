@@ -257,14 +257,16 @@ variable "timezone" {
 
 variable "enable_cert_revocation" {
   description = <<-EOT
-    IKEv2 のクライアント証明書失効(CRL)を有効化する。true の場合、証明書は
+    IKEv2 のクライアント証明書失効(CRL)を有効化する。true（既定）の場合、証明書は
     openssl ca 経由で発行され CA データベースで追跡、`make remove NAME=x` で
-    実際に失効（strongSwan が CRL で拒否）できる。false（既定）ではローカル
-    ファイル削除のみで証明書は有効なまま。fail-open 運用のためロックアウトの
-    危険はない（失効した証明書のみ拒否）。WireGuard には影響しない。
+    実際に失効（strongSwan が CRL で拒否）できる。
+    false にするとローカルファイル削除のみで証明書は有効なまま残り、端末紛失や
+    プロファイル漏洩の際に**接続を止める手段が無くなる**（有効期間は 10 年）ため、
+    無効化は推奨しない。fail-open 運用なのでロックアウトの危険はない（失効した
+    証明書のみ拒否）。WireGuard には影響しない。
   EOT
   type        = bool
-  default     = false
+  default     = true
 }
 
 # -----------------------------------------------------------------------------
@@ -318,6 +320,18 @@ variable "smtp_auth" {
   }
 }
 
+variable "mail_from" {
+  description = <<-EOT
+    警告メールの差出人アドレス。空なら alert_email がそのまま差出人になる。
+    smtp_mode = "local"（VPN 上の dma が直接配送）では**必ず自分が管理するドメインの
+    アドレスにする**こと。受信側アドレス（例 Gmail）を差出人にすると SPF 違反で
+    ほぼ確実に拒否される。例: "orenovpn@vpn.example.com"
+    到達性のため、そのドメインに SPF レコードと VPS の逆引き(PTR)も設定する。
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "smtp_mode" {
   description = "アラート送信方式（\"relay\"=外部SMTPへ msmtp でリレー / \"local\"=VPN上の dma で直接配送・中継なし）"
   type        = string
@@ -345,4 +359,44 @@ variable "alert_blocklist_url" {
   description = "参照する IP ブロックリストの URL（空なら無効）"
   type        = string
   default     = ""
+}
+
+# -----------------------------------------------------------------------------
+# アクセス先の記録（宛先IP / ドメイン名）
+# -----------------------------------------------------------------------------
+variable "enable_access_log" {
+  description = <<-EOT
+    VPN クライアントの新規接続について、宛先 IP・ポート・接続元の VPN 内 IP・時刻を
+    記録する（nat PREROUTING の LOG → カーネルログ → journald）。
+    不正利用や踏み台化の調査に必要な最小の証跡。`make access-log` で参照・集計できる。
+    ※ 完全な URL は TLS で暗号化されているため記録できない（宛先 IP までは確実に残る）。
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_dns_logging" {
+  description = <<-EOT
+    サーバー上に unbound を立て、VPN からの DNS 問い合わせ（ドメイン名）を記録する。
+    VPN サブネットからの 53 番は自前リゾルバへ強制的に転送するため、クライアント設定を
+    作り直さなくても記録される。`make dns-log` で参照・集計できる。
+    待受は VPN 内アドレスと localhost のみ（オープンリゾルバにはならない）。
+    ※ 端末が DoH/DoT（暗号化 DNS）を使う場合は迂回され記録されない。
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "log_retention_days" {
+  description = <<-EOT
+    記録の保存日数。journald の MaxRetentionSec に反映する（併せて SystemMaxUse=1G）。
+    アクセス先の記録は量が出るため、ディスクを守るために上限を設ける。
+  EOT
+  type        = number
+  default     = 14
+
+  validation {
+    condition     = var.log_retention_days >= 1
+    error_message = "log_retention_days は 1 以上を指定してください（0 だと保存期間が無制限扱いになります）。"
+  }
 }

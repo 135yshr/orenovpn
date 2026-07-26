@@ -49,20 +49,37 @@ enable_fail2ban     = true # SSH ブルートフォース対策
 enable_auto_updates = true # 自動セキュリティ更新
 # --- QR配布/失効の詳細（任意）---
 # randomize_profile_port = true # make serve-profile の配信ポートをランダム化
-# enable_cert_revocation = true # IKEv2証明書の失効(CRL)を有効化（make remove で失効可能）
+# enable_cert_revocation = true # IKEv2証明書の失効(CRL)。既定 true のまま推奨（false は漏洩時に接続を止められない）
 
 # --- ⑦ 通信監視・警告（怪しい通信をメール通知）------------------------------
 # 詳細は docs/ALERTING.md。smtp_password は state / orenovpn.env に平文保存される点に注意。
 enable_traffic_alert = true
 alert_email          = "you@example.com"
-smtp_host            = "smtp.gmail.com"
-smtp_port            = 587
-smtp_user            = "you@example.com"
-smtp_password        = "CHANGE_ME_APP_PASSWORD"
+
+# 送信方式は2択。どちらか一方だけを有効にする。
+#  A) 外部 SMTP リレー（到達性が確実。smtp_password は state に平文で残るため
+#     残したくない場合は空にして make configure-alerts で設定する）
+smtp_host     = "smtp.gmail.com"
+smtp_port     = 587
+smtp_user     = "you@example.com"
+smtp_password = "CHANGE_ME_APP_PASSWORD"
+#  B) VPN 上のローカル MTA（外部 SMTP 不要・待受なし＝中継なし）
+#     ★ 外向き25番・PTR・SPF の3点が揃わないと届きません（docs/ALERTING.md 参照）
+# smtp_mode = "local"
+# mail_from = "orenovpn@vpn.example.com" # 自分が管理するドメインのアドレス
 # alert_ssh_fail_threshold = 20
 # alert_traffic_mbytes     = 1024
 # 出口通信検知（悪性IPへの通信をログ＆メール通知。ログのみ・遮断はしない）
 # alert_blocklist_url = "https://example.com/malicious-ips.txt" # 1行1IP/CIDR
+
+# --- ⑧ アクセス先の記録（不正利用の事後調査に必要な証跡）--------------------
+# 「いつ・どの端末が・どこへ」を残す。URL は TLS 暗号化のため記録できない。
+# 詳細と限界（SNI が将来課題である理由）は docs/ALERTING.md を参照。
+enable_access_log = true # 宛先IP/ポートを記録（make access-log）
+# ドメイン名も記録するならサーバー上に自前リゾルバ(unbound)を立てる。
+# 端末が DoH/DoT を使うと迂回される点に注意。他人の端末も繋ぐ場合は周知してから有効化。
+# enable_dns_logging = true # make dns-log で参照
+# log_retention_days = 14   # 保存日数（journald 上限 1G）
 
 # =============================================================================
 # デプロイ後に追加で実施（docs/SECURITY.md 参照）:

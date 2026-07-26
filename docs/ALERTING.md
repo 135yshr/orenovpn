@@ -24,9 +24,17 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | 対象 | 手段 | 負荷 |
 |------|------|------|
 | サーバーへの不審アクセス | `journalctl` の SSH 認証失敗数を集計し閾値判定 | ほぼゼロ |
-| 新規 VPN 接続 | `wg show latest-handshakes` / `swanctl --list-sas` を前回と差分 | ほぼゼロ |
-| 不審な出口通信 | ipset(`orenovpn_blocklist`) + before.rules の LOG で FORWARD を検知（ログのみ・ドロップしない） | 中 |
-| トラフィック量の異常 | 転送バイトの前回比増分を閾値判定 | ほぼゼロ |
+| 新規 VPN 接続 | `wg show latest-handshakes` / `swanctl --list-sas` を前回と差分。接続が 0 件の状態も記録するため「未接続 → 接続」の遷移で通知される（1セッション1通・同種は1時間クールダウン）| ほぼゼロ |
+| 不審な出口通信 | ipset(`orenovpn_blocklist`) + `nat PREROUTING` の LOG で検知（ログのみ・ドロップしない）。**`-s <VPN サブネット>` で VPN 発に限定**し、リスト側も VPN サブネットを `nomatch` で除外する（公開リストは private 範囲を含むため、限定しないと戻り通信が全件一致して誤検知になる）| 中 |
+| トラフィック量の異常 | 転送バイトの前回比増分を閾値判定。WireGuard は `wg show transfer`、IKEv2 は `swanctl --list-sas` の CHILD_SA 転送量を合算（policy ベースの IPsec には `ipsec0` のようなインターフェイスが無いため）| ほぼゼロ |
+| **資格情報の複製** | 同一のピア公開鍵 / 証明書 ID が直近 1 時間に複数の接続元 IP から使われたら警告 | ほぼゼロ |
+
+> 「新規 VPN 接続」は**未知の鍵**しか見ません。設定ファイルやプロファイルを丸ごと
+> 複製されると、正規の鍵で接続されるため peer 一覧は増えず、この検知には掛かりません。
+> 「資格情報の複製」検知（`ALERT_PEER_IP_THRESHOLD`、既定 3 IP/1時間）がその穴を埋めます。
+> 回線切替の多い端末で誤検知が続く場合は、サーバーの `/etc/orenovpn/orenovpn.env` に
+> `ALERT_PEER_IP_THRESHOLD="5"` のように書いて閾値を上げてください（`make setup` で
+> 上書きされない独立キーです）。
 
 ## 設定（terraform.tfvars）
 
@@ -36,6 +44,8 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | `alert_email` | `""` | 通知先メールアドレス |
 | `smtp_host` / `smtp_port` / `smtp_user` | `"" / 587 / ""` | msmtp の送信設定 |
 | `smtp_password` | `""`（sensitive） | SMTP 認証パスワード |
+| `smtp_mode` | `"relay"` | `"relay"`=外部 SMTP へ msmtp でリレー / `"local"`=VPN 上の `dma` が宛先 MX へ直接配送（外部 SMTP 不要・待受なし）|
+| `mail_from` | `""` | 差出人。空なら `alert_email` を使う。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）|
 | `alert_ssh_fail_threshold` | `20` | 1 周期あたり SSH 認証失敗の警告閾値 |
 | `alert_traffic_mbytes` | `1024` | 1 周期あたり転送量の警告閾値（MB） |
 | `alert_blocklist_url` | `""` | 悪性 IP ブロックリスト取得元（空＝出口検知 OFF） |
@@ -43,6 +53,7 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 設定例（`presets/03-hardened.tfvars` にも実例あり）:
 
 ```hcl
+# 外部 SMTP リレー（到達性が確実）
 enable_traffic_alert = true
 alert_email          = "you@example.com"
 smtp_host            = "smtp.gmail.com"
@@ -50,6 +61,23 @@ smtp_port            = 587
 smtp_user            = "you@example.com"
 smtp_password        = "アプリパスワード"
 ```
+
+```hcl
+# VPN 上のローカル MTA（外部 SMTP 不要。dma が宛先 MX へ直接配送）
+enable_traffic_alert = true
+alert_email          = "you@example.com"
+smtp_mode            = "local"
+mail_from            = "orenovpn@vpn.example.com" # ★自分が管理するドメイン
+```
+
+**`local` モードの到達性には3つの前提があります。** どれか欠けるとメールは届きません。
+
+1. **外向き 25 番が使えること**（プロバイダが制限している場合がある）。確認:
+   `timeout 5 bash -c 'exec 3<>/dev/tcp/gmail-smtp-in.l.google.com/25 && head -1 <&3'`
+2. **逆引き(PTR)** … ConoHa のコントロールパネルで VPS の IP に FQDN を設定し、
+   サーバーのホスト名も合わせる（`hostnamectl set-hostname vpn.example.com` → `make setup`）
+3. **SPF** … `mail_from` のドメインに `"v=spf1 ip4:<VPSのIP> -all"` を公開する
+   （`dma` は DKIM 非対応のため、PTR と SPF で担保する）
 
 ## 既存サーバーへの反映（make configure-alerts）
 
@@ -106,10 +134,93 @@ make configure-alerts
     手動設定する運用も可能（`watch.sh` は `/etc/msmtprc` を参照する）。
 - 出口通信検知は既定で**ログのみ**（ドロップしない）。誤検知による VPN 不安定化を避けるため。
 
+## アクセス先の記録（宛先IP / ドメイン名）
+
+監視・警告とは別に、**「いつ・どの端末が・どこへ接続したか」を残す**機能です。既定は OFF。
+不正利用や踏み台化の事後調査には、警告だけでなくこの証跡が必要になります。
+
+### 何が記録できて、何ができないか
+
+| 記録できるもの | 手段 | 前提・限界 |
+|---|---|---|
+| 宛先 IP・ポート・接続元の VPN 内 IP・時刻 | `nat PREROUTING` の `LOG`（新規接続ごとに 1 行）→ カーネルログ → journald | 確実。プロトコルに関係なく残る |
+| ドメイン名 | サーバー上の `unbound` の query log | 端末が **DoH/DoT（暗号化 DNS）を使うと迂回**され記録されない |
+| HTTPS のホスト名（SNI） | — | **未実装（将来課題）**。下記参照 |
+| 完全な URL（パス・クエリ） | — | **不可**。TLS で暗号化されており、復号（MITM）なしには取得できない |
+
+### 設定
+
+| 変数 | 既定 | 用途 |
+|------|------|------|
+| `enable_access_log` | `false` | 宛先 IP/ポートの記録 |
+| `enable_dns_logging` | `false` | 自前リゾルバ(unbound)でドメイン名を記録 |
+| `log_retention_days` | `14` | 保存日数（journald の `MaxRetentionSec`。併せて `SystemMaxUse=1G`）|
+
+既存サーバーには tfvars の変更が届かない（cloud-init は初回のみ）ため、専用コマンドで反映します:
+
+```bash
+make configure-logging ACCESS_LOG=on DNS_LOG=on DAYS=14   # 有効化して setup.sh を再実行
+make configure-logging ACCESS_LOG=off DNS_LOG=off         # 無効化（ルールも撤去）
+make logs-status                                          # 有効/無効・適用ルール・待受を確認
+```
+
+### 参照
+
+```bash
+make access-log            # 宛先IP/ポートの直近と、宛先ごとの集計（上位20）
+make dns-log HOURS=24      # DNS 問い合わせの直近と、名前ごとの集計（上位20）
+```
+
+出力例（`make access-log`）:
+
+```text
+== 宛先ごとの接続数（上位 20 / 過去 6 時間）==
+     2  93.184.216.34:443       from 10.66.66.2
+     2  198.51.100.5:6667       from 10.66.66.9      ← 見慣れないポートへ繰り返し接続
+```
+
+接続元は VPN 内アドレス（`10.66.66.x`）なので、どの端末かは `make clients` の割当と対応します。
+
+### 実装上の要点（変更するときの注意）
+
+- **記録ルールは `nat PREROUTING` に置く**。`FORWARD` や ufw の `ufw-before-forward` に置くと
+  **WireGuard では一切発火しない**（`wg0.conf` の PostUp が FORWARD の先頭で ACCEPT するため
+  ufw のチェーンに到達しない）。`nat PREROUTING` は FORWARD より前で、かつ新規接続の
+  最初のパケットだけが通るので「1 接続 1 行」になる。
+- ルールは `orenovpn-fwlog.service`（oneshot・check-then-add で冪等）が適用する。
+  `before.rules` に書くと `ufw reload` が noflush で再適用して**二重登録**になるため。
+- **DNS は素の 53 番を DNAT で自前リゾルバへ強制**するので、クライアント設定を作り直さなくても
+  記録されます（IKEv2 は配布 DNS 自体もサーバーに切り替わり、再接続で反映）。
+- **unbound は VPN 内アドレスと localhost にしか待受しない**（`access-control` でも VPN
+  サブネットのみ許可）。外部に開くとオープンリゾルバ＝増幅攻撃の踏み台になる。
+  `make doctor` が待受アドレスを検査して全アドレス待受を FAIL にします。
+- unbound が起動できない場合、**DNAT は入れません**（記録より名前解決の維持を優先）。
+- `ufw reset` / `ufw disable`→`enable` のように**組み込みチェーンが作り直される操作**の後は、
+  記録ルールが失われることがあります。`make doctor` が「宛先記録ルール」「出口 LOG ルール」
+  「DNS 強制転送(DNAT)」の欠落を検出するので、指摘されたら次で再適用してください:
+  `sudo systemctl restart orenovpn-fwlog`（`make setup` の再実行でも復旧します）。
+
+### プライバシーと運用
+
+- 記録されるのは接続先です。自分専用ならただの証跡ですが、**家族・同僚など他人の端末も
+  接続している場合は、閲覧履歴に相当する情報が残る**ことを伝えてから有効化してください。
+- 量は端末あたり 1 日 1〜10MB 程度。`log_retention_days` と journald の 1G 上限で頭打ちになります。
+
+### 将来課題: SNI の記録
+
+DoH/DoT を使う端末ではドメイン名が残りません。TLS の ClientHello から SNI を抽出すれば
+名前を取れますが、常駐のパケット解析（`ulogd2` / `suricata` / `zeek` 等）が必要で
+512MB プランでは負荷が見合いません。上位プラン前提のオプトインとして別途検討します。
+なお ECH（Encrypted ClientHello）が普及すると SNI も見えなくなるため、恒久的な手段では
+ありません（宛先 IP の記録だけは常に有効です）。
+
 ## 検知の内部動作（watch.sh）
 
 - 状態は `/var/lib/orenovpn/watch/` に保存（`last_run`・`wg_active_peers`・`traffic_bytes`・
-  `cooldown/<key>`）。
+  `identity_ips`・`cooldown/<key>`）。
+- 資格情報の複製検知は `identity_ips` に `時刻<TAB>識別子<TAB>接続元IP` を蓄積し、
+  1 時間より古い行を毎回捨てて「同一識別子あたりの異なる IP 数」を数える。識別子は
+  WireGuard がピア公開鍵、IKEv2 が証明書の ID（`swanctl --list-sas` の `remote '...'`）。
 - 各検知は独立し、1 つが失敗しても他は継続する。
 - 同種アラートは 1 時間クールダウン（`cooldown/<key>` の mtime で判定）し、5 分周期で同じ
   警告を送り続けない。
