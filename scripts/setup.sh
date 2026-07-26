@@ -516,6 +516,16 @@ CACNF
   # IPv6 リーク対策: v6 有効時のみ ::/0 を提示し、v6 内部アドレスも配布する。
   # （v6 を提示するだけで配布しないと、端末のネイティブ v6 がトンネル外へ漏れる。
   #   逆に v6 無効時は ::/0 を一切提示しない＝端末に v6 経路を作らせない。）
+  # アドレスプールは「サーバー自身のアドレス（${WG_ADDRESS_V4}）を含めない」こと。
+  #   サブネットをそのまま渡すと strongSwan は先頭(.1)から払い出すため、
+  #   ${WG_ADDRESS_V4}（DNS 記録用に lo へ付与している）とクライアントのリースが衝突し、
+  #   「VPN は張れるがインターネットに出られない」状態になる:
+  #     - クライアント自身の住所 = 配布された DNS サーバー → 名前解決できない
+  #     - 戻り通信の宛先がサーバーのローカルアドレスになり、トンネルへ転送されない
+  #   /24・/64 前提で 2 番目以降を割り当てる（swanctl の addrs は範囲指定に対応）。
+  local POOL4_ADDRS POOL6_ADDRS
+  POOL4_ADDRS="${WG_ADDRESS_V4%.*}.2-${WG_ADDRESS_V4%.*}.254"
+  POOL6_ADDRS="${WG_ADDRESS_V6%::*}::2-${WG_ADDRESS_V6%::*}::ffff"
   local LOCAL_TS="0.0.0.0/0" POOL_REF="orenovpn_pool" POOL6_BLOCK=""
   if [ "${WG_ENABLE_IPV6}" = "true" ]; then
     LOCAL_TS="0.0.0.0/0, ::/0"
@@ -523,7 +533,7 @@ CACNF
     # v4/v6 は別プールに分ける（swanctl の pool.addrs は 1 プール 1 アドレス族が確実。
     #  混在指定だと片方しか読み込まれず "no virtual IP found for %any6" になる）。
     POOL6_BLOCK="  orenovpn_pool6 {
-    addrs = ${WG_SUBNET_V6}
+    addrs = ${POOL6_ADDRS}
   }"
   fi
   cat > /etc/swanctl/swanctl.conf <<EOF
@@ -561,7 +571,7 @@ connections {
 }
 pools {
   orenovpn_pool {
-    addrs = ${WG_SUBNET_V4}
+    addrs = ${POOL4_ADDRS}
     dns = ${DNS_SW}
   }
 ${POOL6_BLOCK}

@@ -15,6 +15,7 @@ PROTO="$(getenv VPN_PROTOCOL)"; PROTO="${PROTO:-wireguard}"
 WGPORT="$(getenv WG_PORT)"
 V6="$(getenv WG_ENABLE_IPV6)"
 CRL="$(getenv ENABLE_CERT_REVOCATION)"
+SUB4="$(getenv WG_SUBNET_V4)"
 
 ok=0; warn=0; fail=0
 pass() { echo "[ OK ] $*"; ok=$((ok + 1)); }
@@ -87,6 +88,20 @@ if [ "$PROTO" = "ikev2" ]; then
   done
   if [ "$V6" = "true" ]; then
     if $S swanctl --list-pools 2>/dev/null | grep -q orenovpn_pool6; then pass "IPv6 プール(orenovpn_pool6) あり"; else wrn "IPv6 プールが無い（v6 リークの恐れ）"; fi
+  fi
+  # プールがサーバー自身のアドレスを払い出すと、クライアントの住所と配布DNSが同じになり
+  # 名前解決できず、戻り通信もサーバーに吸われて「VPN は張れるが通信できない」状態になる。
+  SRVADDR="$(getenv WG_ADDRESS_V4)"
+  if [ -n "$SRVADDR" ] && $S swanctl --list-pools 2>/dev/null | grep -qF "${SRVADDR}-"; then
+    bad "アドレスプールの先頭がサーバー自身の ${SRVADDR}（クライアントと衝突し通信不可）→ sudo /usr/local/sbin/setup.sh"
+  elif [ -n "$SUB4" ] && $S grep -qF "addrs = ${SUB4}" /etc/swanctl/swanctl.conf 2>/dev/null; then
+    bad "アドレスプールがサブネット全体（${SUB4}）で先頭がサーバー自身と衝突する → sudo /usr/local/sbin/setup.sh"
+  else
+    pass "アドレスプールはサーバー自身のアドレスを含まない"
+  fi
+  # 実際に払い出された住所がサーバーのものと一致していないか（衝突時の直接検出）
+  if [ -n "$SRVADDR" ] && $S swanctl --list-sas 2>/dev/null | grep -qF "${SRVADDR}]"; then
+    bad "クライアントにサーバー自身の ${SRVADDR} が割り当てられている（要 setup.sh 再実行と再接続）"
   fi
   if [ "$CRL" = "false" ]; then
     bad "証明書失効(CRL)が無効: プロファイル漏洩・端末紛失時に接続を止められない（証明書は10年有効）→ enable_cert_revocation=true にして make setup"
