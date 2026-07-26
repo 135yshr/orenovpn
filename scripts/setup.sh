@@ -154,11 +154,22 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 # shellcheck disable=SC1090,SC1091
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 : "${ALERT_BLOCKLIST_URL:=}"
+: "${WG_SUBNET_V4:=10.66.66.0/24}"
 SET=orenovpn_blocklist
 PERSIST=/etc/orenovpn/blocklist.ipset
 log() { printf '[egress-refresh] %s\n' "$*" >&2; }
 
+# 自分の VPN サブネットは検知対象から除外する。公開ブロックリスト（FireHOL level1 等）は
+# private 範囲（10.0.0.0/8 など）を含むため、除外しないと VPN 内アドレスが常に「悪性」
+# 判定になり、誤検知が大量に出る（実機で 5 分間に 14,188 件を記録した）。
+# hash:net は最長一致で nomatch が優先されるため、より具体的な VPN サブネットを
+# nomatch として入れておけばよい。
+add_exceptions() {
+  ipset add -exist "$1" "$WG_SUBNET_V4" nomatch 2>/dev/null || true
+}
+
 ipset create -exist "$SET" hash:net family inet maxelem 262144
+add_exceptions "$SET"
 
 if [ -z "$ALERT_BLOCKLIST_URL" ]; then
   log "ALERT_BLOCKLIST_URL 未設定。空リストを維持"
@@ -186,6 +197,7 @@ while read -r line; do
     count=$((count + 1))
   fi
 done < "$tmpfile"
+add_exceptions "${SET}_tmp"
 ipset swap "${SET}_tmp" "$SET"
 ipset destroy "${SET}_tmp"
 ipset save "$SET" >"$PERSIST"
@@ -237,22 +249,20 @@ Persistent=true
 WantedBy=timers.target
 EOF
 
-    # before.rules に LOG ルールを冪等追記（NAT と同じ grep ガード方式）
-    if ! grep -q 'orenovpn-egress' /etc/ufw/before.rules; then
-      sed -i '/^:ufw-before-forward /a -A ufw-before-forward -m set --match-set orenovpn_blocklist dst -j LOG --log-prefix "orenovpn-egress: " --log-level 4' /etc/ufw/before.rules
-    fi
+    # LOG ルールは nat PREROUTING 側（orenovpn-fwlog-apply）が入れる。
+    # 旧方式（ufw-before-forward）は撤去する。理由は 2 つ:
+    #   1. WireGuard では PostUp が FORWARD 先頭で ACCEPT するため一切発火しない
+    #   2. 向きの限定が無く、戻り通信（宛先=VPN内アドレス）まで一致してしまう。
+    #      公開ブロックリストは private 範囲を含むため、これが大量の誤検知になる
+    remove_legacy_egress_rule
 
     systemctl daemon-reload
     systemctl enable orenovpn-ipset-restore.service >/dev/null 2>&1 || true
     systemctl enable --now orenovpn-egress-refresh.timer >/dev/null 2>&1 || true
-    ufw reload >/dev/null 2>&1 || log "ufw reload に失敗（before.rules を確認）"
-    log "出口通信検知を有効化（before.rules に LOG ルール・daily 更新）"
+    log "出口通信検知を有効化（nat PREROUTING の LOG・daily 更新）"
   else
-    # ブロックリスト未設定 → 出口検知の後始末（順序: ルール削除→reload→set破棄）
-    if grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then
-      sed -i '/orenovpn-egress/d' /etc/ufw/before.rules
-      ufw reload >/dev/null 2>&1 || true
-    fi
+    # ブロックリスト未設定 → 出口検知の後始末
+    remove_legacy_egress_rule
     systemctl disable --now orenovpn-egress-refresh.timer >/dev/null 2>&1 || true
     systemctl disable orenovpn-ipset-restore.service >/dev/null 2>&1 || true
     ipset destroy orenovpn_blocklist >/dev/null 2>&1 || true
@@ -262,14 +272,27 @@ else
     systemctl disable --now orenovpn-watch.timer >/dev/null 2>&1 || true
     log "通信監視を無効化（timer 停止）"
   fi
-  if grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then
-    sed -i '/orenovpn-egress/d' /etc/ufw/before.rules
-    ufw reload >/dev/null 2>&1 || true
-  fi
+  remove_legacy_egress_rule
   systemctl disable --now orenovpn-egress-refresh.timer >/dev/null 2>&1 || true
   systemctl disable orenovpn-ipset-restore.service >/dev/null 2>&1 || true
   ipset destroy orenovpn_blocklist >/dev/null 2>&1 || true
 fi
+}
+
+# 旧方式の出口検知ルール（ufw-before-forward の LOG）を撤去する。
+#   `ufw reload` は使わない（before.rules を noflush で再適用するため、前置している
+#   orenovpn-nat ブロックの MASQUERADE が二重登録される）。実チェーンから直接消す。
+remove_legacy_egress_rule() {
+  local removed=0
+  if grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then
+    sed -i '/orenovpn-egress/d' /etc/ufw/before.rules
+    removed=1
+  fi
+  while iptables -D ufw-before-forward -m set --match-set orenovpn_blocklist dst \
+      -j LOG --log-prefix "orenovpn-egress: " --log-level 4 >/dev/null 2>&1; do
+    removed=1
+  done
+  [ "$removed" = 1 ] && log "旧方式の出口検知ルール(ufw-before-forward)を撤去" || true
 }
 
 # サブコマンド: `setup.sh alerts` で監視設定だけを冪等に再構成する
@@ -788,12 +811,25 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 [ -f "$ENV_FILE" ] && . "$ENV_FILE"
 : "${ENABLE_ACCESS_LOG:=false}"
 : "${ENABLE_DNS_LOGGING:=false}"
+: "${ALERT_BLOCKLIST_URL:=}"
 : "${WG_ENABLE_IPV6:=false}"
 : "${WG_SUBNET_V4:=10.66.66.0/24}"
 : "${WG_SUBNET_V6:=fd42:66:66::/64}"
 : "${WG_ADDRESS_V4:=10.66.66.1}"
 : "${WG_ADDRESS_V6:=fd42:66:66::1}"
 MODE="${1:-apply}"
+
+# 出口ブロックリスト検知を入れるか。ipset が無い状態でルールを入れると
+# iptables が失敗するため、セットの存在を確認する。
+egress_ok() {
+  [ -n "$ALERT_BLOCKLIST_URL" ] || return 1
+  command -v ipset >/dev/null 2>&1 || return 1
+  if ! ipset list -n 2>/dev/null | grep -qx orenovpn_blocklist; then
+    echo "[fwlog] ipset(orenovpn_blocklist) が無いため出口検知ルールは入れません" >&2
+    return 1
+  fi
+  return 0
+}
 
 # 待受が無いのに DNS を DNAT すると、クライアントの名前解決が全滅する。
 # unit が active でも bind に失敗していることがあるため、systemctl ではなく
@@ -857,6 +893,15 @@ for_each_rule() {
       "${action}_rule" "$fam" -s "$sub" -p udp --dport 53 -j DNAT --to-destination "${addr}:53"
       "${action}_rule" "$fam" -s "$sub" -p tcp --dport 53 -j DNAT --to-destination "${addr}:53"
     fi
+    # 出口ブロックリスト検知（v4 のみ。ipset は family inet）。
+    #   必ず「VPN サブネット発」に限定する。向きを限定しないと戻り通信（宛先=VPN内
+    #   アドレス）が private 範囲として一致し、大量の誤検知になる。
+    #   nat PREROUTING なので新規接続の 1 パケットのみ = 1 接続 1 行。上限も付ける。
+    if [ "$fam" = v4 ] && { [ "$action" = del ] || egress_ok; }; then
+      "${action}_rule" v4 -s "$sub" -m set --match-set orenovpn_blocklist dst \
+        -m limit --limit 30/min --limit-burst 60 \
+        -j LOG --log-prefix "orenovpn-egress: " --log-level 4
+    fi
   done
 }
 
@@ -870,7 +915,7 @@ EOS
 [Unit]
 Description=orenovpn access log / DNS redirect rules
 # unbound より後に走らせる（稼働確認できたときだけ DNS を DNAT するため）
-After=ufw.service network-online.target unbound.service wg-quick@wg0.service
+After=ufw.service network-online.target unbound.service wg-quick@wg0.service orenovpn-ipset-restore.service
 Wants=network-online.target
 
 [Service]
@@ -1055,5 +1100,11 @@ configure_access_log
 # メール通知する。詳細は docs/ALERTING.md。監視本体は Makefile が
 # /usr/local/sbin/orenovpn-watch に install する。
 configure_traffic_alert
+
+# ipset は configure_traffic_alert で作られるため、出口検知ルールを載せるために
+# 記録ルールを最後にもう一度適用する（冪等）。
+if [ -x /usr/local/sbin/orenovpn-fwlog-apply ]; then
+  /usr/local/sbin/orenovpn-fwlog-apply apply || log "警告: 記録ルールの再適用に失敗"
+fi
 
 log "セットアップ完了 (${VPN_PROTOCOL})"

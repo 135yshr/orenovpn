@@ -158,7 +158,21 @@ if [ "$ALERT" = "true" ]; then
   BLOCKLIST="$(getenv ALERT_BLOCKLIST_URL)"
   if [ -n "$BLOCKLIST" ]; then
     if $S ipset list orenovpn_blocklist >/dev/null 2>&1; then pass "出口ブロックリスト(ipset) 配置あり"; else wrn "orenovpn_blocklist が未ロード"; fi
-    if $S grep -q 'orenovpn-egress' /etc/ufw/before.rules 2>/dev/null; then pass "出口 LOG ルール(before.rules) 設定あり"; else wrn "before.rules に出口 LOG ルールが無い"; fi
+    if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -q 'orenovpn-egress'; then
+      pass "出口 LOG ルール(nat PREROUTING) 設定あり"
+    else
+      wrn "出口 LOG ルールが無い（sudo systemctl restart orenovpn-fwlog で適用）"
+    fi
+    # 旧方式が残っていると戻り通信まで一致して誤検知が大量に出る
+    if $S iptables -S ufw-before-forward 2>/dev/null | grep -q 'orenovpn-egress'; then
+      bad "旧方式の出口 LOG ルール(ufw-before-forward)が残存（戻り通信を誤検知）→ sudo /usr/local/sbin/setup.sh"
+    fi
+    # ブロックリストに VPN サブネットの除外(nomatch)が入っているか
+    if $S ipset list orenovpn_blocklist 2>/dev/null | grep -q 'nomatch'; then
+      pass "ブロックリストに VPN サブネットの除外(nomatch)あり"
+    else
+      wrn "VPN サブネットが除外されていない（private 範囲を含むリストでは誤検知の原因）→ sudo /usr/local/sbin/orenovpn-egress-refresh"
+    fi
     n="$($S ipset list orenovpn_blocklist 2>/dev/null | grep -c '^[0-9]')"
     echo "[INFO] ブロックリスト登録数: ${n:-0}"
   fi
