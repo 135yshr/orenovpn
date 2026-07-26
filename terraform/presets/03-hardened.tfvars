@@ -64,6 +64,15 @@ smtp_password        = "CHANGE_ME_APP_PASSWORD"
 # 出口通信検知（悪性IPへの通信をログ＆メール通知。ログのみ・遮断はしない）
 # alert_blocklist_url = "https://example.com/malicious-ips.txt" # 1行1IP/CIDR
 
+# --- ⑧ アクセス先の記録（不正利用の事後調査に必要な証跡）--------------------
+# 「いつ・どの端末が・どこへ」を残す。URL は TLS 暗号化のため記録できない。
+# 詳細と限界（SNI が将来課題である理由）は docs/ALERTING.md を参照。
+enable_access_log = true # 宛先IP/ポートを記録（make access-log）
+# ドメイン名も記録するならサーバー上に自前リゾルバ(unbound)を立てる。
+# 端末が DoH/DoT を使うと迂回される点に注意。他人の端末も繋ぐ場合は周知してから有効化。
+# enable_dns_logging = true # make dns-log で参照
+# log_retention_days = 14   # 保存日数（journald 上限 1G）
+
 # =============================================================================
 # デプロイ後に追加で実施（docs/SECURITY.md 参照）:
 #   □ クライアント側の kill switch を有効化（VPN切断時の漏洩防止）

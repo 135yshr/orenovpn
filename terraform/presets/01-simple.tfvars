@@ -48,6 +48,12 @@ wg_clients = ["phone"] # 例: ["phone", "laptop", "tablet"]
 # randomize_profile_port = true           # make serve-profile の配信ポートをランダム化
 # enable_cert_revocation = true # IKEv2証明書の失効(CRL)。既定 true のまま推奨（false は漏洩時に接続を止められない）
 
+# --- アクセス先の記録（任意・既定OFF。詳細は docs/ALERTING.md）---
+#   URL は TLS 暗号化のため記録できない。残るのは宛先IP・ポート・ドメイン名まで。
+# enable_access_log  = true # 接続先(宛先IP/ポート)を記録（make access-log）
+# enable_dns_logging = true # ドメイン名を記録（サーバー上に unbound を立てる。make dns-log）
+# log_retention_days = 14   # 記録の保存日数（journald 上限 1G）
+
 # 通信監視・警告を使うなら（詳細は docs/ALERTING.md）:
 #   注意: smtp_password を tfvars に書くと Terraform state に平文で残ります。
 #   state に残したくない場合は tfvars で設定せず `make configure-alerts` を使ってください。

@@ -348,3 +348,38 @@ variable "alert_blocklist_url" {
   type        = string
   default     = ""
 }
+
+# -----------------------------------------------------------------------------
+# アクセス先の記録（宛先IP / ドメイン名）
+# -----------------------------------------------------------------------------
+variable "enable_access_log" {
+  description = <<-EOT
+    VPN クライアントの新規接続について、宛先 IP・ポート・接続元の VPN 内 IP・時刻を
+    記録する（nat PREROUTING の LOG → カーネルログ → journald）。
+    不正利用や踏み台化の調査に必要な最小の証跡。`make access-log` で参照・集計できる。
+    ※ 完全な URL は TLS で暗号化されているため記録できない（宛先 IP までは確実に残る）。
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "enable_dns_logging" {
+  description = <<-EOT
+    サーバー上に unbound を立て、VPN からの DNS 問い合わせ（ドメイン名）を記録する。
+    VPN サブネットからの 53 番は自前リゾルバへ強制的に転送するため、クライアント設定を
+    作り直さなくても記録される。`make dns-log` で参照・集計できる。
+    待受は VPN 内アドレスと localhost のみ（オープンリゾルバにはならない）。
+    ※ 端末が DoH/DoT（暗号化 DNS）を使う場合は迂回され記録されない。
+  EOT
+  type        = bool
+  default     = false
+}
+
+variable "log_retention_days" {
+  description = <<-EOT
+    記録の保存日数。journald の MaxRetentionSec に反映する（併せて SystemMaxUse=1G）。
+    アクセス先の記録は量が出るため、ディスクを守るために上限を設ける。
+  EOT
+  type        = number
+  default     = 14
+}

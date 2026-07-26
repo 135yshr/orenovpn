@@ -153,5 +153,48 @@ else
   echo "[INFO] 通信監視は無効（ENABLE_TRAFFIC_ALERT!=true）"
 fi
 
+# 6. アクセス先の記録（有効時のみ点検）
+#    DNS は待受を誤るとオープンリゾルバ（増幅攻撃の踏み台）になるため必ず確認する。
+ACCESSLOG="$(getenv ENABLE_ACCESS_LOG)"
+DNSLOG="$(getenv ENABLE_DNS_LOGGING)"
+if [ "$ACCESSLOG" = "true" ] || [ "$DNSLOG" = "true" ]; then
+  if $S test -x /usr/local/sbin/orenovpn-logs; then
+    pass "記録参照ツール配置あり（make access-log / make dns-log）"
+  else
+    wrn "/usr/local/sbin/orenovpn-logs が無い（make setup を再実行）"
+  fi
+  if $S test -f /etc/systemd/journald.conf.d/orenovpn-logs.conf; then
+    pass "記録の保存上限を設定済み（journald）"
+  else
+    wrn "journald の保存上限が未設定（ディスクを消費し続ける恐れ）→ sudo /usr/local/sbin/setup.sh"
+  fi
+fi
+if [ "$ACCESSLOG" = "true" ]; then
+  if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -q 'orenovpn-dst'; then
+    pass "宛先記録ルール(nat PREROUTING) 設定あり"
+  else
+    bad "宛先記録が有効なのにルールが無い（何も記録されていない）→ sudo systemctl restart orenovpn-fwlog"
+  fi
+fi
+if [ "$DNSLOG" = "true" ]; then
+  if $S systemctl is-active --quiet unbound 2>/dev/null; then pass "unbound 稼働中"; else bad "unbound が非稼働 → journalctl -u unbound"; fi
+  SRVIP="$(getenv SERVER_IP)"
+  L53="$($S ss -uln 2>/dev/null | awk 'NR > 1 && $5 ~ /:53$/ {print $5}' | sort -u | tr '\n' ' ')"
+  if printf '%s' "$L53" | grep -qE '(^| )(0\.0\.0\.0|\*|\[::\]):53( |$)'; then
+    bad "DNS が全アドレスで待受＝オープンリゾルバの恐れ: ${L53}→ sudo /usr/local/sbin/setup.sh"
+  elif [ -n "$SRVIP" ] && printf '%s' "$L53" | grep -qF "${SRVIP}:53"; then
+    bad "DNS がグローバル IP で待受＝オープンリゾルバ: ${L53}→ sudo /usr/local/sbin/setup.sh"
+  elif [ -n "$L53" ]; then
+    pass "DNS 待受は VPN 内/localhost のみ: ${L53}"
+  else
+    wrn "53 番の待受が無い（unbound の設定を確認）"
+  fi
+  if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -qE 'dport 53 -j DNAT'; then
+    pass "DNS 強制転送(DNAT) 設定あり"
+  else
+    wrn "DNS の DNAT が無い（端末が別のリゾルバを使うと名前が記録されない）"
+  fi
+fi
+
 echo "== 結果: OK=${ok} WARN=${warn} FAIL=${fail} =="
 [ "$fail" -eq 0 ] || { echo "→ FAIL があります。上の指示に従って対処してください。"; exit 1; }

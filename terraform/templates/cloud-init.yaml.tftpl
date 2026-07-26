@@ -51,6 +51,9 @@ write_files:
       ALERT_SSH_FAIL_THRESHOLD="${alert_ssh_fail_threshold}"
       ALERT_TRAFFIC_MBYTES="${alert_traffic_mbytes}"
       ALERT_BLOCKLIST_URL="${alert_blocklist_url}"
+      ENABLE_ACCESS_LOG="${enable_access_log}"
+      ENABLE_DNS_LOGGING="${enable_dns_logging}"
+      LOG_RETENTION_DAYS="${log_retention_days}"
 
   # --- SSH 堅牢化（ポート22固定・鍵認証のみ・パスワード無効）----------------
   # root は prohibit-password（鍵ならOK）でフォールバックを残す。AllowUsers は

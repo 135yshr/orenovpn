@@ -33,6 +33,14 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-true}"
 : "${SMTP_MODE:=relay}"
 : "${MAIL_FROM:=}"
 : "${ALERT_BLOCKLIST_URL:=}"
+# --- アクセス先の記録（既定 OFF・オプトイン）--------------------------------
+# ENABLE_ACCESS_LOG  : VPN クライアントの新規接続の宛先(IP/ポート)を記録する
+# ENABLE_DNS_LOGGING : サーバー上に unbound を立て、VPN の DNS 問い合わせ（ドメイン名）を記録する
+# LOG_RETENTION_DAYS : 記録の保存日数（journald の MaxRetentionSec に反映）
+: "${ENABLE_ACCESS_LOG:=false}"
+: "${ENABLE_DNS_LOGGING:=false}"
+: "${LOG_RETENTION_DAYS:=14}"
+case "${LOG_RETENTION_DAYS}" in ''|*[!0-9]*) LOG_RETENTION_DAYS=14 ;; esac
 
 # 通信監視・警告の構成を関数化。通常フローの section 8 と `setup.sh alerts` の両方から呼ぶ。
 configure_traffic_alert() {
@@ -323,6 +331,7 @@ case "$VPN_PROTOCOL" in
 esac
 [ "${ENABLE_FAIL2BAN}" = "true" ]     && PKGS="$PKGS fail2ban"
 [ "${ENABLE_AUTO_UPDATES}" = "true" ] && PKGS="$PKGS unattended-upgrades apt-listchanges"
+[ "${ENABLE_DNS_LOGGING}" = "true" ]  && PKGS="$PKGS unbound"
 
 if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
   PKGS="$PKGS ipset"
@@ -488,7 +497,15 @@ CACNF
   echo 'agent { load = no }' > /etc/strongswan.d/charon/agent.conf
 
   # --- swanctl 接続定義（IKEv2 / 証明書認証 / ロードウォリア）
-  local DNS_SW; DNS_SW="$(echo "${WG_DNS}" | sed 's/,/, /g')"
+  # クライアントへ配布する DNS。名前解決を記録する場合は自前リゾルバ(unbound)を配る。
+  # （IKEv2 はここを変えるだけで再接続時に反映される＝プロファイル作り直し不要）
+  local DNS_SW
+  if [ "${ENABLE_DNS_LOGGING}" = "true" ]; then
+    DNS_SW="${WG_ADDRESS_V4}"
+    [ "${WG_ENABLE_IPV6}" = "true" ] && DNS_SW="${DNS_SW}, ${WG_ADDRESS_V6}"
+  else
+    DNS_SW="$(echo "${WG_DNS}" | sed 's/,/, /g')"
+  fi
   # IPv6 リーク対策: v6 有効時のみ ::/0 を提示し、v6 内部アドレスも配布する。
   # （v6 を提示するだけで配布しないと、端末のネイティブ v6 がトンネル外へ漏れる。
   #   逆に v6 無効時は ::/0 を一切提示しない＝端末に v6 経路を作らせない。）
@@ -720,6 +737,279 @@ if [ -n "${WG_INITIAL_CLIENTS:-}" ] && command -v vpn-client >/dev/null 2>&1; th
     fi
   done
 fi
+
+# -----------------------------------------------------------------------------
+# 7.5 アクセス先の記録（宛先IP / ドメイン名）— 既定 OFF のオプトイン
+#
+#   記録できるものと、できないもの:
+#     ○ 宛先 IP・ポート・接続元の VPN 内 IP・時刻（nat PREROUTING の LOG）
+#     ○ ドメイン名（自前 unbound の query log。素の DNS(53) は DNAT で強制的に通す）
+#     × 完全な URL（TLS で暗号化されているため復号なしには取得不能）
+#     △ HTTPS の SNI は取得可能だが常駐解析が必要。将来課題（docs/ALERTING.md 参照）
+#     ※ 端末が DoH/DoT（暗号化 DNS）を使う場合、ドメイン名の記録は迂回される。
+#
+#   置き場所の注意: 宛先 LOG は **nat PREROUTING** に置く。FORWARD だと WireGuard の
+#   PostUp が先頭で ACCEPT するため ufw のチェーンへ到達せずログが一切出ない
+#   （既存の出口ブロックリスト検知が WireGuard で発火しないのはこれが理由）。
+#   nat PREROUTING は FORWARD より前・新規接続の最初のパケットだけを通るため、
+#   両プロトコルで「1 接続 1 行」の記録になる。
+# -----------------------------------------------------------------------------
+configure_access_log() {
+  # ルールは systemd の oneshot（check-then-add で冪等）で適用する。
+  # before.rules に書くと `ufw reload` が noflush で再適用して二重登録になるため。
+  cat >/usr/local/sbin/orenovpn-fwlog-apply <<'EOS'
+#!/usr/bin/env bash
+# orenovpn-fwlog-apply : アクセス先記録(LOG)と DNS 強制転送(DNAT)を nat PREROUTING へ
+#   冪等に適用する（setup.sh が生成）。引数 delete で全削除。
+#   設定は /etc/orenovpn/orenovpn.env を読む。
+set -euo pipefail
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090,SC1091
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+: "${ENABLE_ACCESS_LOG:=false}"
+: "${ENABLE_DNS_LOGGING:=false}"
+: "${WG_ENABLE_IPV6:=false}"
+: "${WG_SUBNET_V4:=10.66.66.0/24}"
+: "${WG_SUBNET_V6:=fd42:66:66::/64}"
+: "${WG_ADDRESS_V4:=10.66.66.1}"
+: "${WG_ADDRESS_V6:=fd42:66:66::1}"
+MODE="${1:-apply}"
+
+# unbound が動いていないのに DNS を DNAT すると、クライアントの名前解決が全滅する。
+# 記録より通信の維持を優先し、稼働確認できたときだけ DNAT を入れる。
+if [ "$ENABLE_DNS_LOGGING" = "true" ] && ! systemctl is-active --quiet unbound 2>/dev/null; then
+  echo "[fwlog] unbound が非稼働のため DNS 転送は入れません（名前解決を優先）" >&2
+  ENABLE_DNS_LOGGING=false
+fi
+
+ipt_for() { [ "$1" = v6 ] && echo ip6tables || echo iptables; }
+
+# 既存ルールを消す（重複していても全部消えるまで繰り返す）
+del_rule() {
+  local fam="$1"; shift
+  local ipt; ipt="$(ipt_for "$fam")"
+  while "$ipt" -t nat -C PREROUTING "$@" >/dev/null 2>&1; do
+    "$ipt" -t nat -D PREROUTING "$@" >/dev/null 2>&1 || break
+  done
+}
+add_rule() {
+  local fam="$1"; shift
+  local ipt; ipt="$(ipt_for "$fam")"
+  "$ipt" -t nat -C PREROUTING "$@" >/dev/null 2>&1 || "$ipt" -t nat -A PREROUTING "$@"
+}
+
+# 対象ルールの一覧（削除も追加も同じ定義を使うので取り残しが出ない）
+for_each_rule() {
+  local action="$1" fam sub addr
+  for fam in v4 v6; do
+    if [ "$fam" = v4 ]; then
+      sub="$WG_SUBNET_V4"; addr="$WG_ADDRESS_V4"
+    else
+      # 削除時は v6 無効でも処理する（v6 を後から無効化した場合の取り残し防止）
+      [ "$WG_ENABLE_IPV6" = "true" ] || [ "$action" = del ] || continue
+      sub="$WG_SUBNET_V6"; addr="[${WG_ADDRESS_V6}]"
+    fi
+    # 記録は DNAT より前に置く（DNS も「本来の宛先」で記録されるように）
+    # 削除時は設定に関係なく全部消す（無効化したときに取り残さないため）
+    if [ "$action" = del ] || [ "$ENABLE_ACCESS_LOG" = "true" ]; then
+      "${action}_rule" "$fam" -s "$sub" -j LOG --log-prefix "orenovpn-dst: " --log-level 6
+    fi
+    if [ "$action" = del ] || [ "$ENABLE_DNS_LOGGING" = "true" ]; then
+      "${action}_rule" "$fam" -s "$sub" -p udp --dport 53 -j DNAT --to-destination "${addr}:53"
+      "${action}_rule" "$fam" -s "$sub" -p tcp --dport 53 -j DNAT --to-destination "${addr}:53"
+    fi
+  done
+}
+
+# apply は「全削除 → 有効なものだけ追加」で設定変更にも追従する
+for_each_rule del
+[ "$MODE" = delete ] || for_each_rule add
+EOS
+  chmod 0755 /usr/local/sbin/orenovpn-fwlog-apply
+
+  cat >/etc/systemd/system/orenovpn-fwlog.service <<'EOF'
+[Unit]
+Description=orenovpn access log / DNS redirect rules
+# unbound より後に走らせる（稼働確認できたときだけ DNS を DNAT するため）
+After=ufw.service network-online.target unbound.service wg-quick@wg0.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/orenovpn-fwlog-apply apply
+ExecStop=/usr/local/sbin/orenovpn-fwlog-apply delete
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  systemctl daemon-reload
+
+  if [ "${ENABLE_ACCESS_LOG}" = "true" ] || [ "${ENABLE_DNS_LOGGING}" = "true" ]; then
+    systemctl enable orenovpn-fwlog.service >/dev/null 2>&1 || true
+    /usr/local/sbin/orenovpn-fwlog-apply apply || log "警告: 記録ルールの適用に失敗"
+    # journald の保存量と期間に上限を付ける（記録は量が出るため必須）。
+    mkdir -p /etc/systemd/journald.conf.d
+    cat >/etc/systemd/journald.conf.d/orenovpn-logs.conf <<EOF
+# orenovpn が生成。アクセス先/DNS の記録はカーネルログと unbound のログに出るため、
+# 使用量と保存期間に上限を付ける（LOG_RETENTION_DAYS=${LOG_RETENTION_DAYS}）。
+[Journal]
+Storage=persistent
+SystemMaxUse=1G
+MaxRetentionSec=${LOG_RETENTION_DAYS}day
+RateLimitIntervalSec=30s
+RateLimitBurst=20000
+EOF
+    systemctl restart systemd-journald >/dev/null 2>&1 || true
+    log "アクセス先の記録を有効化（保存 ${LOG_RETENTION_DAYS} 日 / 上限 1G・make access-log で参照）"
+  else
+    /usr/local/sbin/orenovpn-fwlog-apply delete >/dev/null 2>&1 || true
+    systemctl disable orenovpn-fwlog.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/journald.conf.d/orenovpn-logs.conf
+    systemctl restart systemd-journald >/dev/null 2>&1 || true
+  fi
+}
+
+# 自前 DNS リゾルバ(unbound)で名前解決を記録する。
+#   ⚠️ 外部に開くとオープンリゾルバ（増幅攻撃の踏み台）になる。待受は VPN 内アドレスと
+#      localhost のみ・access-control でも VPN サブネットだけ許可の二重で塞ぐ。
+configure_dns_logging() {
+  if [ "${ENABLE_DNS_LOGGING}" != "true" ]; then
+    if [ -f /etc/unbound/unbound.conf.d/orenovpn.conf ]; then
+      rm -f /etc/unbound/unbound.conf.d/orenovpn.conf
+      systemctl disable --now unbound >/dev/null 2>&1 || true
+      systemctl disable --now orenovpn-dns-addr.service >/dev/null 2>&1 || true
+      log "DNS 記録を無効化（unbound 停止）"
+    fi
+    return 0
+  fi
+  command -v unbound >/dev/null 2>&1 || { log "警告: unbound が無いため DNS 記録を構成できません"; return 0; }
+
+  # DNSSEC のルート鍵が無いと unbound は起動できない（Debian の設定が
+  # auto-trust-anchor-file を参照するため）。パッケージ導入時に作られなかった場合に備える。
+  if [ ! -s /var/lib/unbound/root.key ] && command -v unbound-anchor >/dev/null 2>&1; then
+    mkdir -p /var/lib/unbound
+    # 鍵を更新すると終了コード 1 を返す仕様のため成否は判定しない
+    unbound-anchor -a /var/lib/unbound/root.key >/dev/null 2>&1 || true
+    chown -R unbound:unbound /var/lib/unbound 2>/dev/null || true
+  fi
+
+  # IKEv2 は wg0 が無く VPN 内アドレスがどこにも付いていないため、lo に付与して
+  # クライアントから 10.66.66.1 等で到達できるようにする（WireGuard は wg0 が持つ）。
+  if [ "$VPN_PROTOCOL" = "ikev2" ]; then
+    local v6add="" v6del=""
+    if [ "${WG_ENABLE_IPV6}" = "true" ]; then
+      v6add="ExecStart=-/sbin/ip -6 addr add ${WG_ADDRESS_V6}/128 dev lo"
+      v6del="ExecStop=-/sbin/ip -6 addr del ${WG_ADDRESS_V6}/128 dev lo"
+    fi
+    cat >/etc/systemd/system/orenovpn-dns-addr.service <<EOF
+[Unit]
+Description=orenovpn DNS service address on loopback (IKEv2)
+After=network-pre.target
+Before=unbound.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=-/sbin/ip -4 addr add ${WG_ADDRESS_V4}/32 dev lo
+${v6add}
+ExecStop=-/sbin/ip -4 addr del ${WG_ADDRESS_V4}/32 dev lo
+${v6del}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    systemctl daemon-reload
+    systemctl enable --now orenovpn-dns-addr.service >/dev/null 2>&1 || true
+  fi
+
+  local ifaces="  interface: 127.0.0.1
+  interface: ${WG_ADDRESS_V4}"
+  local acl="  access-control: 0.0.0.0/0 refuse
+  access-control: 127.0.0.0/8 allow
+  access-control: ${WG_SUBNET_V4} allow"
+  local do_ip6="no"
+  if [ "${WG_ENABLE_IPV6}" = "true" ]; then
+    do_ip6="yes"
+    ifaces="${ifaces}
+  interface: ::1
+  interface: ${WG_ADDRESS_V6}"
+    acl="${acl}
+  access-control: ::/0 refuse
+  access-control: ::1 allow
+  access-control: ${WG_SUBNET_V6} allow"
+  fi
+  mkdir -p /etc/unbound/unbound.conf.d
+  cat >/etc/unbound/unbound.conf.d/orenovpn.conf <<EOF
+# orenovpn が生成（手動編集は make setup で上書きされます）。
+# VPN 内からの問い合わせだけに応答し、名前解決を journald へ記録する。
+server:
+  verbosity: 1
+  # 問い合わせ内容（接続元IP・ドメイン名）を記録する。応答は記録しない。
+  log-queries: yes
+  log-replies: no
+  use-syslog: yes
+  # wg0 が上がる前でも VPN 内アドレスにバインドできるようにする
+  ip-freebind: yes
+  do-ip6: ${do_ip6}
+${ifaces}
+  # ★ 外部からの問い合わせは拒否（オープンリゾルバ化の防止）
+${acl}
+  hide-identity: yes
+  hide-version: yes
+  harden-glue: yes
+  harden-dnssec-stripped: yes
+  qname-minimisation: yes
+  prefetch: yes
+  # 512MB プランでも収まる控えめなキャッシュ
+  msg-cache-size: 8m
+  rrset-cache-size: 16m
+  cache-max-ttl: 3600
+EOF
+  # 上流は wg_dns（利用者が選んだリゾルバ）へ転送する。未設定なら unbound 自身が再帰解決する。
+  local d fwd=""
+  for d in $(echo "${WG_DNS}" | tr ',' ' '); do
+    [ -n "$d" ] && fwd="${fwd}  forward-addr: ${d}"$'\n'
+  done
+  if [ -n "$fwd" ]; then
+    {
+      echo 'forward-zone:'
+      echo '  name: "."'
+      printf '%s' "$fwd"
+    } >>/etc/unbound/unbound.conf.d/orenovpn.conf
+  fi
+  chmod 644 /etc/unbound/unbound.conf.d/orenovpn.conf
+
+  # 設定不備で DNS を壊さないよう、検証に通ったときだけ有効化する（VPN 本体は止めない）。
+  if ! unbound-checkconf >/dev/null 2>&1; then
+    log "警告: unbound の設定検証に失敗したため DNS 記録を無効化します（unbound-checkconf を確認）"
+    rm -f /etc/unbound/unbound.conf.d/orenovpn.conf
+    return 0
+  fi
+  systemctl enable unbound >/dev/null 2>&1 || true
+  if systemctl restart unbound >/dev/null 2>&1; then
+    log "DNS 記録を有効化（unbound / 待受: ${WG_ADDRESS_V4} と localhost のみ・make dns-log で参照）"
+  else
+    log "警告: unbound を起動できませんでした（journalctl -u unbound）。DNS 記録は無効のままです"
+    rm -f /etc/unbound/unbound.conf.d/orenovpn.conf
+    systemctl disable --now unbound >/dev/null 2>&1 || true
+    # DNS を死んだリゾルバへ DNAT しないよう、この実行では無効扱いにする
+    # （クライアントの名前解決を壊さないことを優先する）。
+    ENABLE_DNS_LOGGING=false
+    return 0
+  fi
+
+  # VPN 内からの 53 番を許可（DNAT 後にローカルへ入るため INPUT の許可が必要）
+  ufw allow from "${WG_SUBNET_V4}" to any port 53 proto udp comment 'orenovpn DNS' >/dev/null 2>&1 || true
+  ufw allow from "${WG_SUBNET_V4}" to any port 53 proto tcp comment 'orenovpn DNS' >/dev/null 2>&1 || true
+  if [ "${WG_ENABLE_IPV6}" = "true" ]; then
+    ufw allow from "${WG_SUBNET_V6}" to any port 53 proto udp comment 'orenovpn DNS' >/dev/null 2>&1 || true
+    ufw allow from "${WG_SUBNET_V6}" to any port 53 proto tcp comment 'orenovpn DNS' >/dev/null 2>&1 || true
+  fi
+}
+
+configure_dns_logging
+configure_access_log
 
 # ---- 8. 通信監視・警告（watch.sh + systemd timer）--------------------------
 # 怪しい通信（SSH 失敗急増・新規接続・トラフィック急増・悪性 IP 通信）を検知して

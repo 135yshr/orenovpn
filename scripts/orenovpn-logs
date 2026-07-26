@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+#
+# orenovpn-logs : 記録したアクセス先を表示・集計する（make access-log / make dns-log）
+#
+#   orenovpn-logs access [時間]   宛先 IP/ポートの記録（nat PREROUTING の LOG → カーネルログ）
+#   orenovpn-logs dns    [時間]   DNS 問い合わせの記録（unbound の query log）
+#   orenovpn-logs status          記録機能の有効/無効と保存設定を表示
+#
+#   時間は「何時間前まで」を整数で指定（既定 6）。サーバー上で root で実行する。
+#
+#   記録できるもの / できないもの:
+#     ○ 宛先 IP・ポート・接続元の VPN 内 IP・時刻
+#     ○ ドメイン名（素の DNS(53) は自前リゾルバへ強制的に通すため確実に残る）
+#     × 完全な URL（TLS で暗号化されており復号なしには取得できない）
+#     △ 端末が DoH/DoT を使うと DNS の記録は迂回される（宛先 IP は残る）
+#
+set -euo pipefail
+
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090,SC1091
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+: "${ENABLE_ACCESS_LOG:=false}"
+: "${ENABLE_DNS_LOGGING:=false}"
+: "${LOG_RETENTION_DAYS:=14}"
+
+MODE="${1:-access}"
+HOURS="${2:-6}"
+TOP=20
+LINES=60
+
+die() { echo "エラー: $*" >&2; exit 1; }
+[ "$(id -u)" -eq 0 ] || die "root 権限で実行してください（sudo orenovpn-logs ...）"
+case "$HOURS" in ''|*[!0-9]*) die "時間は整数で指定してください（例: orenovpn-logs access 6）" ;; esac
+SINCE="${HOURS} hours ago"
+
+hint_enable() {
+  echo "  有効化: make configure-logging ACCESS_LOG=on DNS_LOG=on"
+  echo "         （tfvars では enable_access_log / enable_dns_logging）"
+}
+
+show_status() {
+  echo "== 記録機能の状態 =="
+  echo "  宛先IP の記録 (ENABLE_ACCESS_LOG) : ${ENABLE_ACCESS_LOG}"
+  echo "  DNS の記録   (ENABLE_DNS_LOGGING) : ${ENABLE_DNS_LOGGING}"
+  echo "  保存期間 (LOG_RETENTION_DAYS)     : ${LOG_RETENTION_DAYS} 日（journald 上限 1G）"
+  echo
+  echo "== 適用されている記録ルール (nat PREROUTING) =="
+  iptables -t nat -S PREROUTING 2>/dev/null | grep -E 'orenovpn-dst|--dport 53' || echo "（なし）"
+  if [ "${WG_ENABLE_IPV6:-false}" = "true" ]; then
+    ip6tables -t nat -S PREROUTING 2>/dev/null | grep -E 'orenovpn-dst|--dport 53' || true
+  fi
+  if [ "${ENABLE_DNS_LOGGING}" = "true" ]; then
+    echo
+    echo "== unbound の待受（VPN 内アドレスと localhost のみであること）=="
+    ss -ulnp 2>/dev/null | grep ':53 ' || echo "（待受なし）"
+  fi
+}
+
+show_access() {
+  local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  journalctl -k --no-pager -o short-iso --since "$SINCE" 2>/dev/null \
+    | grep -F 'orenovpn-dst: ' >"$tmp" || true
+  if [ ! -s "$tmp" ]; then
+    echo "直近 ${HOURS} 時間の宛先記録はありません。"
+    [ "${ENABLE_ACCESS_LOG}" = "true" ] || { echo "（宛先IP の記録は無効です）"; hint_enable; }
+    return 0
+  fi
+  echo "== 直近の接続（最新 ${LINES} 件 / 過去 ${HOURS} 時間）=="
+  printf '%-25s %-18s %-40s %s\n' '時刻' '接続元(VPN内)' '宛先' 'プロトコル:ポート'
+  tail -n "$LINES" "$tmp" | awk '
+    {
+      src = ""; dst = ""; proto = ""; dpt = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^SRC=/)        src = substr($i, 5)
+        else if ($i ~ /^DST=/)   dst = substr($i, 5)
+        else if ($i ~ /^PROTO=/) proto = substr($i, 7)
+        else if ($i ~ /^DPT=/)   dpt = substr($i, 5)
+      }
+      printf "%-25s %-18s %-40s %s\n", $1, src, dst, proto (dpt == "" ? "" : ":" dpt)
+    }'
+  echo
+  echo "== 宛先ごとの接続数（上位 ${TOP} / 過去 ${HOURS} 時間）=="
+  awk '
+    {
+      dst = ""; dpt = ""; src = ""
+      for (i = 1; i <= NF; i++) {
+        if ($i ~ /^DST=/)      dst = substr($i, 5)
+        else if ($i ~ /^DPT=/) dpt = substr($i, 5)
+        else if ($i ~ /^SRC=/) src = substr($i, 5)
+      }
+      if (dst == "") next
+      k = dst (dpt == "" ? "" : ":" dpt)
+      c[k]++
+      if (index(" " s[k] " ", " " src " ") == 0) s[k] = s[k] " " src
+    }
+    END { for (k in c) printf "%6d  %-42s from%s\n", c[k], k, s[k] }' "$tmp" \
+    | sort -rn | head -n "$TOP"
+  echo
+  echo "全件: journalctl -k --since '${SINCE}' | grep orenovpn-dst"
+}
+
+show_dns() {
+  if [ "${ENABLE_DNS_LOGGING}" != "true" ]; then
+    echo "DNS の記録は無効です。"
+    hint_enable
+    return 0
+  fi
+  local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  # unbound の query log 形式: "... info: <接続元IP> <名前>. <型> <クラス>"
+  journalctl -u unbound --no-pager -o short-iso --since "$SINCE" 2>/dev/null \
+    | awk '$NF == "IN" && NF >= 5 {printf "%s %s %s %s\n", $1, $(NF-3), $(NF-2), $(NF-1)}' >"$tmp" || true
+  if [ ! -s "$tmp" ]; then
+    echo "直近 ${HOURS} 時間の DNS 記録はありません。"
+    echo "（端末が DoH/DoT を使っていると素の DNS が飛ばず記録されません。宛先IP は make access-log で確認できます）"
+    return 0
+  fi
+  echo "== 直近の DNS 問い合わせ（最新 ${LINES} 件 / 過去 ${HOURS} 時間）=="
+  printf '%-25s %-18s %-45s %s\n' '時刻' '接続元(VPN内)' '名前' '型'
+  tail -n "$LINES" "$tmp" | awk '{printf "%-25s %-18s %-45s %s\n", $1, $2, $3, $4}'
+  echo
+  echo "== 名前ごとの問い合わせ数（上位 ${TOP} / 過去 ${HOURS} 時間）=="
+  awk '{c[$3]++} END {for (k in c) printf "%6d  %s\n", c[k], k}' "$tmp" | sort -rn | head -n "$TOP"
+  echo
+  echo "全件: journalctl -u unbound --since '${SINCE}' | grep info:"
+}
+
+case "$MODE" in
+  access) show_access ;;
+  dns)    show_dns ;;
+  status) show_status ;;
+  *)      die "使い方: orenovpn-logs {access|dns|status} [時間]" ;;
+esac

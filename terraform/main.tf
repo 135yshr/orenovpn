@@ -66,6 +66,9 @@ locals {
     alert_ssh_fail_threshold = var.alert_ssh_fail_threshold
     alert_traffic_mbytes     = var.alert_traffic_mbytes
     alert_blocklist_url      = var.alert_blocklist_url
+    enable_access_log        = var.enable_access_log
+    enable_dns_logging       = var.enable_dns_logging
+    log_retention_days       = var.log_retention_days
   })
 }
 

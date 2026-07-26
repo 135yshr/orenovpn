@@ -167,7 +167,28 @@ sudo systemctl enable --now auditd
 最高水準を求める場合は、クライアント端末で鍵を生成し、公開鍵のみをサーバーへ
 登録する運用に切り替えてください（秘密鍵がサーバーを経由しなくなります）。
 
-### 7. 通信監視・警告（任意）
+### 7. アクセス先の記録（任意・調査用の証跡）
+
+`enable_access_log = true` で、VPN クライアントの新規接続について**宛先 IP・ポート・
+接続元の VPN 内 IP・時刻**を記録します。`enable_dns_logging = true` を足すと、サーバー上の
+`unbound` で**ドメイン名**も記録します。既定はどちらも OFF。
+
+```bash
+make configure-logging ACCESS_LOG=on DNS_LOG=on DAYS=14   # 既存サーバーへ反映
+make access-log        # 宛先IP/ポートと集計
+make dns-log           # ドメイン名と集計
+```
+
+- **完全な URL は記録できません**（TLS 暗号化のため。取るには MITM が必要で本末転倒です）。
+- 端末が DoH/DoT を使うとドメイン名は残りません（宛先 IP は残ります）。
+- `unbound` は VPN 内アドレスと localhost のみ待受し、`access-control` でも VPN サブネット
+  だけを許可します（オープンリゾルバ化の防止）。`make doctor` が待受を検査します。
+- 保存は `log_retention_days`（既定 14 日）と journald の 1G 上限で頭打ちになります。
+- 他人の端末も接続している場合、記録は閲覧履歴に相当します。有効化前に周知してください。
+
+設計と限界（SNI を将来課題とする理由を含む）は [`ALERTING.md`](ALERTING.md#アクセス先の記録宛先ip--ドメイン名) にまとめています。
+
+### 8. 通信監視・警告（任意）
 
 `enable_traffic_alert = true` にすると、`watch.sh` を systemd timer で **5 分ごと**に実行し、
 次の兆候を検知して `msmtp` でメール通知します。

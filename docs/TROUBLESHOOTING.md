@@ -271,6 +271,21 @@ ConoHa VPS Ver.3.0 上に本テンプレートで VPN を実際に構築する�
    `systemctl disable --now nftables` で ufw に一本化する（最重要級の落とし穴）。
 7. SSH のポート変更は避け 22 番固定が無難（socket activation 等の事故要因）。
 
+## 20. 出口通信の LOG が WireGuard では一度も発火しない（アクセス先記録の設計理由）
+
+- **症状**: `alert_blocklist_url` を設定しても、WireGuard 構成では悪性 IP への通信が
+  検知されない（IKEv2 では検知される）。
+- **原因**: LOG ルールを ufw の `ufw-before-forward` 鎖に入れているが、WireGuard の
+  転送許可は `wg0.conf` の PostUp が **FORWARD の先頭**（ufw のチェーンへの jump より前）に
+  入れて ACCEPT してしまうため、パケットが ufw のチェーンに到達しない。
+- **対処**: アクセス先の記録（`enable_access_log` / `enable_dns_logging`）は
+  **`nat PREROUTING`** にルールを置く。PREROUTING は FORWARD より前に通り、かつ新規接続の
+  最初のパケットだけが通るため「1 接続 1 行」で両プロトコルともに記録できる。
+  適用は `orenovpn-fwlog.service`（`iptables -C` してから `-A` する冪等スクリプト）が担う
+  （`before.rules` に書くと `ufw reload` が noflush で再適用して二重登録になる）。
+- **学び**: 「ルールを書いた」＝「そこを通る」ではない。**パケットが実際にそのチェーンに
+  到達するか**を、鎖の順序まで含めて確認する（`iptables -S FORWARD` の先頭を見る）。
+
 ## セキュリティ上の不変条件（壊すと「認証なしで入れる」状態に戻る）
 
 1. **配信サーバーに `SimpleHTTPRequestHandler` を使わない**。autoindex で URL トークンが
@@ -280,7 +295,9 @@ ConoHa VPS Ver.3.0 上に本テンプレートで VPN を実際に構築する�
 3. **MASQUERADE には必ず `-s <VPN サブネット>`**、FORWARD の許可は向きまで限定する。
    `-o wg0 -j ACCEPT` のような無条件許可は外部からトンネル内への到達を許す。
 4. **IKEv2 の失効(CRL)は有効のまま**。無効だと漏洩した証明書を止められない。
-5. 上記はすべて `make doctor` が点検する。構成を触ったら `make doctor` を実行する。
+5. **DNS 記録の unbound は VPN 内アドレスと localhost だけに待受させる**。全アドレスや
+   グローバル IP で待受するとオープンリゾルバ（増幅攻撃の踏み台）になる。
+6. 上記はすべて `make doctor` が点検する。構成を触ったら `make doctor` を実行する。
 
 ## VPN（IKEv2/IPsec）構成の要点
 

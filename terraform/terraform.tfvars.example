@@ -56,3 +56,9 @@ ssh_public_key = "ssh-ed25519 AAAAC3Nza... your_comment"
 # profile_port            = 443           # 配信ポート（既定 443。IPv4v6-Web が 80/443 を開く）
 # randomize_profile_port  = true          # 配信ポートを apply 時にランダム(20000-60000)決定
 # enable_cert_revocation  = true          # IKEv2 証明書の失効(CRL)。既定 true（false は漏洩時に止められない）
+
+# --- アクセス先の記録（任意・既定 OFF。詳細は docs/ALERTING.md）--------------
+# URL は TLS 暗号化のため記録できない。残るのは宛先IP・ポート・ドメイン名まで。
+# enable_access_log       = true          # 接続先(宛先IP/ポート)を記録（make access-log）
+# enable_dns_logging      = true          # ドメイン名を記録（unbound を立てる。make dns-log）
+# log_retention_days      = 14            # 記録の保存日数（journald 上限 1G）

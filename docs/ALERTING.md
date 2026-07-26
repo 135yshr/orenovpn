@@ -114,6 +114,82 @@ make configure-alerts
     手動設定する運用も可能（`watch.sh` は `/etc/msmtprc` を参照する）。
 - 出口通信検知は既定で**ログのみ**（ドロップしない）。誤検知による VPN 不安定化を避けるため。
 
+## アクセス先の記録（宛先IP / ドメイン名）
+
+監視・警告とは別に、**「いつ・どの端末が・どこへ接続したか」を残す**機能です。既定は OFF。
+不正利用や踏み台化の事後調査には、警告だけでなくこの証跡が必要になります。
+
+### 何が記録できて、何ができないか
+
+| 記録できるもの | 手段 | 前提・限界 |
+|---|---|---|
+| 宛先 IP・ポート・接続元の VPN 内 IP・時刻 | `nat PREROUTING` の `LOG`（新規接続ごとに 1 行）→ カーネルログ → journald | 確実。プロトコルに関係なく残る |
+| ドメイン名 | サーバー上の `unbound` の query log | 端末が **DoH/DoT（暗号化 DNS）を使うと迂回**され記録されない |
+| HTTPS のホスト名（SNI） | — | **未実装（将来課題）**。下記参照 |
+| 完全な URL（パス・クエリ） | — | **不可**。TLS で暗号化されており、復号（MITM）なしには取得できない |
+
+### 設定
+
+| 変数 | 既定 | 用途 |
+|------|------|------|
+| `enable_access_log` | `false` | 宛先 IP/ポートの記録 |
+| `enable_dns_logging` | `false` | 自前リゾルバ(unbound)でドメイン名を記録 |
+| `log_retention_days` | `14` | 保存日数（journald の `MaxRetentionSec`。併せて `SystemMaxUse=1G`）|
+
+既存サーバーには tfvars の変更が届かない（cloud-init は初回のみ）ため、専用コマンドで反映します:
+
+```bash
+make configure-logging ACCESS_LOG=on DNS_LOG=on DAYS=14   # 有効化して setup.sh を再実行
+make configure-logging ACCESS_LOG=off DNS_LOG=off         # 無効化（ルールも撤去）
+make logs-status                                          # 有効/無効・適用ルール・待受を確認
+```
+
+### 参照
+
+```bash
+make access-log            # 宛先IP/ポートの直近と、宛先ごとの集計（上位20）
+make dns-log HOURS=24      # DNS 問い合わせの直近と、名前ごとの集計（上位20）
+```
+
+出力例（`make access-log`）:
+
+```
+== 宛先ごとの接続数（上位 20 / 過去 6 時間）==
+     2  93.184.216.34:443       from 10.66.66.2
+     2  198.51.100.5:6667       from 10.66.66.9      ← 見慣れないポートへ繰り返し接続
+```
+
+接続元は VPN 内アドレス（`10.66.66.x`）なので、どの端末かは `make clients` の割当と対応します。
+
+### 実装上の要点（変更するときの注意）
+
+- **記録ルールは `nat PREROUTING` に置く**。`FORWARD` や ufw の `ufw-before-forward` に置くと
+  **WireGuard では一切発火しない**（`wg0.conf` の PostUp が FORWARD の先頭で ACCEPT するため
+  ufw のチェーンに到達しない）。`nat PREROUTING` は FORWARD より前で、かつ新規接続の
+  最初のパケットだけが通るので「1 接続 1 行」になる。
+- ルールは `orenovpn-fwlog.service`（oneshot・check-then-add で冪等）が適用する。
+  `before.rules` に書くと `ufw reload` が noflush で再適用して**二重登録**になるため。
+- **DNS は素の 53 番を DNAT で自前リゾルバへ強制**するので、クライアント設定を作り直さなくても
+  記録されます（IKEv2 は配布 DNS 自体もサーバーに切り替わり、再接続で反映）。
+- **unbound は VPN 内アドレスと localhost にしか待受しない**（`access-control` でも VPN
+  サブネットのみ許可）。外部に開くとオープンリゾルバ＝増幅攻撃の踏み台になる。
+  `make doctor` が待受アドレスを検査して全アドレス待受を FAIL にします。
+- unbound が起動できない場合、**DNAT は入れません**（記録より名前解決の維持を優先）。
+
+### プライバシーと運用
+
+- 記録されるのは接続先です。自分専用ならただの証跡ですが、**家族・同僚など他人の端末も
+  接続している場合は、閲覧履歴に相当する情報が残る**ことを伝えてから有効化してください。
+- 量は端末あたり 1 日 1〜10MB 程度。`log_retention_days` と journald の 1G 上限で頭打ちになります。
+
+### 将来課題: SNI の記録
+
+DoH/DoT を使う端末ではドメイン名が残りません。TLS の ClientHello から SNI を抽出すれば
+名前を取れますが、常駐のパケット解析（`ulogd2` / `suricata` / `zeek` 等）が必要で
+512MB プランでは負荷が見合いません。上位プラン前提のオプトインとして別途検討します。
+なお ECH（Encrypted ClientHello）が普及すると SNI も見えなくなるため、恒久的な手段では
+ありません（宛先 IP の記録だけは常に有効です）。
+
 ## 検知の内部動作（watch.sh）
 
 - 状態は `/var/lib/orenovpn/watch/` に保存（`last_run`・`wg_active_peers`・`traffic_bytes`・

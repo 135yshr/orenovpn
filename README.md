@@ -117,6 +117,9 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `make serve-profile NAME=x` | iPhone へ QR で構成プロファイルを配布 |
 | `make profile NAME=x` | 構成/設定ファイルを手元にダウンロード |
 | `make remove NAME=x` | クライアント x を削除 |
+| `make access-log` | 記録した接続先（宛先 IP/ポート）を表示・集計 |
+| `make dns-log` | 記録した DNS 問い合わせ（ドメイン名）を表示・集計 |
+| `make configure-logging ACCESS_LOG=on DNS_LOG=on` | 既存サーバーで記録を ON/OFF |
 | `make ssh` | サーバーへ SSH |
 | `make images` / `make volume-types` | 利用可能な OS イメージ / ボリュームタイプを確認 |
 | `make destroy` | VPN を完全撤去 |
@@ -141,6 +144,8 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `wg_clients` | `["client1"]` | 初期作成クライアント |
 | `randomize_profile_port` | `false` | QR 配布ポートを apply 時にランダム化 |
 | `enable_cert_revocation` | `true` | IKEv2 証明書の失効(CRL)。`make remove` で実際に失効できる（**false にすると漏洩時に止められない**）|
+| `enable_access_log` | `false` | 接続先（宛先 IP/ポート）を記録する（`make access-log`）|
+| `enable_dns_logging` | `false` | ドメイン名を記録する（サーバー上に unbound を立てる。`make dns-log`）|
 
 ---
 
