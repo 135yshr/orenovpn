@@ -16,6 +16,7 @@ make fmt            # terraform fmt -recursive
 make preset PRESET=balanced   # プリセットを terraform.tfvars にコピー（simple|balanced|hardened|ikev2）
 make init && make deploy      # フェーズ1: VPS 作成（terraform init / apply）
 make setup          # フェーズ2: スクリプトを SSH 転送し setup.sh を sudo 実行（VPN 構成）
+make sync-scripts   # サーバー上のスクリプトだけ更新（setup.sh は実行しない・修正の反映に使う）
 make doctor         # サーバー構成の自己診断（scripts/doctor.sh をリモート実行）
 make client NAME=x  # クライアント追加。make clients / show / remove も同様
 make access-log     # 記録した接続先(宛先IP)を表示。make dns-log / logs-status も同様

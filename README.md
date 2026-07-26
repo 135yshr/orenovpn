@@ -110,6 +110,7 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `make deploy` | VPS を作成/更新（フェーズ1）|
 | `make status` | SSH 疎通を待つ |
 | `make setup` | ソフト導入・VPN 構成（フェーズ2）|
+| `make sync-scripts` | サーバー上のスクリプトだけを最新に更新（構成は変更しない）|
 | `make doctor` | サーバー構成を自己診断（不通/通信不可の切り分け）|
 | `make client NAME=x` | クライアント x を追加（QR/プロファイル）|
 | `make clients` | クライアント一覧 |

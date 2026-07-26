@@ -32,7 +32,7 @@ export NAME
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
-.PHONY: help preset init plan deploy apply status setup ssh doctor alerts-test alerts-status configure-alerts configure-logging access-log dns-log logs-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
+.PHONY: help preset init plan deploy apply status setup sync-scripts ssh doctor alerts-test alerts-status configure-alerts configure-logging access-log dns-log logs-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
 
 # HOURS（記録の参照範囲）を整数に検証し、未指定なら 6 にする。各レシピの先頭で呼ぶ。
 HOURSCHECK = HOURS="$${HOURS:-6}"; printf '%s' "$$HOURS" | grep -qE '^[0-9]+$$' || { echo "HOURS は整数で指定してください（例: HOURS=6）"; exit 1; }
@@ -87,6 +87,20 @@ setup: ## ソフト導入・VPN構成を実行（deploy後・観察しながら�
 	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
 	         sudo /usr/local/sbin/setup.sh 2>&1 | sudo tee /var/log/orenovpn-setup.log && \
 	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-logs"'
+
+sync-scripts: ## サーバー上のスクリプトだけを最新に更新（setup.sh は実行しない）
+	@echo "スクリプトを転送中..."
+	@$(SCP) scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh scripts/orenovpn-logs $(SSH_USER)@$(SSH_HOST):/tmp/
+	@$(SSH) 'bash -o pipefail -c "\
+	         sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && \
+	         sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && \
+	         sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && \
+	         sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && \
+	         sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && \
+	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
+	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-logs"'
+	@echo "✅ スクリプトを更新しました。"
+	@echo "   ※ サーバー構成そのもの（ufw / unbound / 記録ルール等）の反映には make setup が必要です。"
 
 ssh: ## サーバーへ SSH 接続
 	@$(SSH)
