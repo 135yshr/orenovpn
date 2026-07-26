@@ -179,7 +179,10 @@ fi
 if [ "$DNSLOG" = "true" ]; then
   if $S systemctl is-active --quiet unbound 2>/dev/null; then pass "unbound 稼働中"; else bad "unbound が非稼働 → journalctl -u unbound"; fi
   SRVIP="$(getenv SERVER_IP)"
-  L53="$($S ss -uln 2>/dev/null | awk 'NR > 1 && $5 ~ /:53$/ {print $5}' | sort -u | tr '\n' ' ')"
+  # ss は指定するプロトコルによって Netid 列の有無が変わるため、列番号で拾うと取り違える
+  # （`ss -uln` には Netid 列が無く、$5 は Peer 側の "0.0.0.0:*" になる）。
+  # 列位置に依存せず、":53" で終わるフィールドをすべて拾う。
+  L53="$($S ss -uln 2>/dev/null | awk 'NR > 1 {for (i = 1; i <= NF; i++) if ($i ~ /:53$/) print $i}' | sort -u | tr '\n' ' ')"
   if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -qE 'dport 53 -j DNAT'; then
     DNSDNAT=yes
   else

@@ -52,7 +52,8 @@ show_status() {
   if [ "${ENABLE_DNS_LOGGING}" = "true" ]; then
     echo
     echo "== unbound の待受（VPN 内アドレスと localhost のみであること）=="
-    ss -ulnp 2>/dev/null | grep ':53 ' || echo "（待受なし）"
+    # `ss -uln` は Netid 列が無く列位置が変わるため、行全体を正規表現で判定する
+    ss -ulnp 2>/dev/null | awk 'NR > 1 && /:53( |$)/' | grep . || echo "（待受なし）"
   fi
 }
 

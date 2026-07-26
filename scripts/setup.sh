@@ -795,10 +795,18 @@ dns_dnat_ok() { # $1 = DNAT 先アドレス（v6 は角括弧付き）
     echo "[fwlog] ss が無く unbound も非稼働のため DNS 転送は入れません" >&2
     return 1
   fi
-  local listening
-  listening="$(ss -uln 2>/dev/null | awk 'NR > 1 {print $5}')"
-  printf '%s\n' "$listening" | grep -qxF "${1}:53" && return 0
-  printf '%s\n' "$listening" | grep -qxE '(0\.0\.0\.0|\*|\[::\]):53' && return 0
+  local i listening
+  # 起動直後は待受が上がる前に来ることがあるため数回待つ（再起動後に記録が
+  # 静かに止まるのを防ぐ）。
+  for i in 1 2 3 4 5; do
+    # ss は指定プロトコルにより Netid 列の有無が変わる（`ss -uln` は $5 が Peer 側）。
+    # 列位置に依存せず ":53" で終わるフィールドを拾う。
+    listening="$(ss -uln 2>/dev/null | awk 'NR > 1 {for (j = 1; j <= NF; j++) if ($j ~ /:53$/) print $j}')"
+    printf '%s\n' "$listening" | grep -qxF "${1}:53" && return 0
+    printf '%s\n' "$listening" | grep -qxE '(0\.0\.0\.0|\*|\[::\]):53' && return 0
+    [ "$i" = 5 ] && break
+    sleep 1
+  done
   echo "[fwlog] ${1}:53 で待受が無いため DNS 転送は入れません（名前解決を優先）" >&2
   return 1
 }

@@ -320,6 +320,18 @@ variable "smtp_auth" {
   }
 }
 
+variable "mail_from" {
+  description = <<-EOT
+    警告メールの差出人アドレス。空なら alert_email がそのまま差出人になる。
+    smtp_mode = "local"（VPN 上の dma が直接配送）では**必ず自分が管理するドメインの
+    アドレスにする**こと。受信側アドレス（例 Gmail）を差出人にすると SPF 違反で
+    ほぼ確実に拒否される。例: "orenovpn@vpn.example.com"
+    到達性のため、そのドメインに SPF レコードと VPS の逆引き(PTR)も設定する。
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "smtp_mode" {
   description = "アラート送信方式（\"relay\"=外部SMTPへ msmtp でリレー / \"local\"=VPN上の dma で直接配送・中継なし）"
   type        = string

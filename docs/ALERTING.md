@@ -44,6 +44,8 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | `alert_email` | `""` | 通知先メールアドレス |
 | `smtp_host` / `smtp_port` / `smtp_user` | `"" / 587 / ""` | msmtp の送信設定 |
 | `smtp_password` | `""`（sensitive） | SMTP 認証パスワード |
+| `smtp_mode` | `"relay"` | `"relay"`=外部 SMTP へ msmtp でリレー / `"local"`=VPN 上の `dma` が宛先 MX へ直接配送（外部 SMTP 不要・待受なし）|
+| `mail_from` | `""` | 差出人。空なら `alert_email` を使う。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）|
 | `alert_ssh_fail_threshold` | `20` | 1 周期あたり SSH 認証失敗の警告閾値 |
 | `alert_traffic_mbytes` | `1024` | 1 周期あたり転送量の警告閾値（MB） |
 | `alert_blocklist_url` | `""` | 悪性 IP ブロックリスト取得元（空＝出口検知 OFF） |
@@ -51,6 +53,7 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 設定例（`presets/03-hardened.tfvars` にも実例あり）:
 
 ```hcl
+# 外部 SMTP リレー（到達性が確実）
 enable_traffic_alert = true
 alert_email          = "you@example.com"
 smtp_host            = "smtp.gmail.com"
@@ -58,6 +61,23 @@ smtp_port            = 587
 smtp_user            = "you@example.com"
 smtp_password        = "アプリパスワード"
 ```
+
+```hcl
+# VPN 上のローカル MTA（外部 SMTP 不要。dma が宛先 MX へ直接配送）
+enable_traffic_alert = true
+alert_email          = "you@example.com"
+smtp_mode            = "local"
+mail_from            = "orenovpn@vpn.example.com" # ★自分が管理するドメイン
+```
+
+**`local` モードの到達性には3つの前提があります。** どれか欠けるとメールは届きません。
+
+1. **外向き 25 番が使えること**（プロバイダが制限している場合がある）。確認:
+   `timeout 5 bash -c 'exec 3<>/dev/tcp/gmail-smtp-in.l.google.com/25 && head -1 <&3'`
+2. **逆引き(PTR)** … ConoHa のコントロールパネルで VPS の IP に FQDN を設定し、
+   サーバーのホスト名も合わせる（`hostnamectl set-hostname vpn.example.com` → `make setup`）
+3. **SPF** … `mail_from` のドメインに `"v=spf1 ip4:<VPSのIP> -all"` を公開する
+   （`dma` は DKIM 非対応のため、PTR と SPF で担保する）
 
 ## 既存サーバーへの反映（make configure-alerts）
 

@@ -55,10 +55,18 @@ enable_auto_updates = true # 自動セキュリティ更新
 # 詳細は docs/ALERTING.md。smtp_password は state / orenovpn.env に平文保存される点に注意。
 enable_traffic_alert = true
 alert_email          = "you@example.com"
-smtp_host            = "smtp.gmail.com"
-smtp_port            = 587
-smtp_user            = "you@example.com"
-smtp_password        = "CHANGE_ME_APP_PASSWORD"
+
+# 送信方式は2択。どちらか一方だけを有効にする。
+#  A) 外部 SMTP リレー（到達性が確実。smtp_password は state に平文で残るため
+#     残したくない場合は空にして make configure-alerts で設定する）
+smtp_host     = "smtp.gmail.com"
+smtp_port     = 587
+smtp_user     = "you@example.com"
+smtp_password = "CHANGE_ME_APP_PASSWORD"
+#  B) VPN 上のローカル MTA（外部 SMTP 不要・待受なし＝中継なし）
+#     ★ 外向き25番・PTR・SPF の3点が揃わないと届きません（docs/ALERTING.md 参照）
+# smtp_mode = "local"
+# mail_from = "orenovpn@vpn.example.com" # 自分が管理するドメインのアドレス
 # alert_ssh_fail_threshold = 20
 # alert_traffic_mbytes     = 1024
 # 出口通信検知（悪性IPへの通信をログ＆メール通知。ログのみ・遮断はしない）
