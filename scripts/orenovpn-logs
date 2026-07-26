@@ -107,9 +107,14 @@ show_dns() {
     return 0
   fi
   local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
-  # unbound の query log 形式: "... info: <接続元IP> <名前>. <型> <クラス>"
+  # クライアントの問い合わせ（log-queries の出力）は
+  #   "... info: <接続元IP> <名前>. <型> <クラス>"
+  # の形。unbound 自身が出す "info: sending query: _ta-xxxx. NULL IN"（DNSSEC の
+  # トラストアンカー通知）等も末尾が IN で並びが同じため、接続元の位置が
+  # IP アドレスの字面（16進・ドット・コロンのみ）であることを条件に加えて除外する。
   journalctl -u unbound --no-pager -o short-iso --since "$SINCE" 2>/dev/null \
-    | awk '$NF == "IN" && NF >= 5 {printf "%s %s %s %s\n", $1, $(NF-3), $(NF-2), $(NF-1)}' >"$tmp" || true
+    | awk '$NF == "IN" && NF >= 5 && $(NF-3) ~ /^[0-9a-fA-F.:]+$/ \
+           {printf "%s %s %s %s\n", $1, $(NF-3), $(NF-2), $(NF-1)}' >"$tmp" || true
   if [ ! -s "$tmp" ]; then
     echo "直近 ${HOURS} 時間の DNS 記録はありません。"
     echo "（端末が DoH/DoT を使っていると素の DNS が飛ばず記録されません。宛先IP は make access-log で確認できます）"
