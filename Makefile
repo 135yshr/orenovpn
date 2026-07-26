@@ -99,7 +99,7 @@ alerts-test: ## 通信監視のテストメールを送信（設定確認用）
 	@$(SSH) 'sudo orenovpn-watch test'
 
 alerts-status: ## 通信監視 timer の状態と直近ログを表示
-	@$(SSH) 'systemctl status orenovpn-watch.timer --no-pager || true; echo; journalctl -u orenovpn-watch --no-pager -n 20 || true'
+	@$(SSH) 'systemctl status orenovpn-watch.timer --no-pager || true; echo; sudo journalctl -u orenovpn-watch --no-pager -n 20 || true'
 
 configure-alerts: ## 既存サーバーにアラート設定を反映（対話入力・state に残さない）
 	@ORENOVPN_SSH="$(SSH)" bash scripts/configure-alerts.sh
