@@ -59,6 +59,19 @@ else
     printf '認証なしで設定します（自前 SMTP は STARTTLS 既定。平文のみの場合は後で /etc/msmtprc を調整）。\n' >&2
   fi
 fi
+# SSH ログイン成功の通知。鍵が漏れた場合の侵入は認証失敗を伴わないため、
+# 「失敗の急増」では気付けない。既定 ON。
+SL="$(prompt 'SSH ログイン成功をメールで通知しますか? [Y/n]: ')"
+case "$SL" in
+  [Nn]*) SSHLOGIN=false ;;
+  *)     SSHLOGIN=true ;;
+esac
+SLIGN=""
+if [ "$SSHLOGIN" = "true" ]; then
+  SLIGN="$(prompt '通知から除外する接続元 IP（空白区切り・任意）: ')"
+  printf '自分の作業（make setup 等）のログインでも通知が届きます。\n' >&2
+fi
+
 BL="$(prompt 'ALERT_BLOCKLIST_URL (任意・空でスキップ): ')"
 
 # env ファイル（bash が source する）へ安全に書けるよう \ " ` $ をエスケープ
@@ -74,6 +87,8 @@ fragment="$(
   printf 'SMTP_AUTH="%s"\n' "$(esc "$AUTH")"
   printf 'SMTP_USER="%s"\n' "$(esc "$SU")"
   printf 'SMTP_PASSWORD="%s"\n' "$(esc "$PW")"
+  printf 'ENABLE_SSH_LOGIN_ALERT="%s"\n' "$SSHLOGIN"
+  printf 'ALERT_SSH_LOGIN_IGNORE_IPS="%s"\n' "$(esc "$SLIGN")"
   printf 'ALERT_BLOCKLIST_URL="%s"\n' "$(esc "$BL")"
 )"
 
@@ -88,7 +103,7 @@ ENVF=/etc/orenovpn/orenovpn.env
 new="$(mktemp)"
 frag="$(mktemp)"
 cat > "$frag"
-grep -vE "^(ENABLE_TRAFFIC_ALERT|SMTP_MODE|ALERT_EMAIL|MAIL_FROM|SMTP_HOST|SMTP_PORT|SMTP_AUTH|SMTP_USER|SMTP_PASSWORD|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
+grep -vE "^(ENABLE_TRAFFIC_ALERT|SMTP_MODE|ALERT_EMAIL|MAIL_FROM|SMTP_HOST|SMTP_PORT|SMTP_AUTH|SMTP_USER|SMTP_PASSWORD|ENABLE_SSH_LOGIN_ALERT|ALERT_SSH_LOGIN_IGNORE_IPS|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
 cat "$frag" >> "$new"
 install -m 600 -o root -g root "$new" "$ENVF"
 rm -f "$new" "$frag"
