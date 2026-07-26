@@ -394,4 +394,9 @@ variable "log_retention_days" {
   EOT
   type        = number
   default     = 14
+
+  validation {
+    condition     = var.log_retention_days >= 1
+    error_message = "log_retention_days は 1 以上を指定してください（0 だと保存期間が無制限扱いになります）。"
+  }
 }

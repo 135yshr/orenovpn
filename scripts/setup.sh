@@ -40,7 +40,9 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-true}"
 : "${ENABLE_ACCESS_LOG:=false}"
 : "${ENABLE_DNS_LOGGING:=false}"
 : "${LOG_RETENTION_DAYS:=14}"
+# 空・非数値・0 は既定へ戻す（0 だと journald の保存期間が無制限扱いになる）
 case "${LOG_RETENTION_DAYS}" in ''|*[!0-9]*) LOG_RETENTION_DAYS=14 ;; esac
+[ "${LOG_RETENTION_DAYS}" -ge 1 ] 2>/dev/null || LOG_RETENTION_DAYS=14
 
 # 通信監視・警告の構成を関数化。通常フローの section 8 と `setup.sh alerts` の両方から呼ぶ。
 configure_traffic_alert() {
@@ -701,24 +703,34 @@ apply_ipsec_forward_rules() {
     [ -f "$file" ] || continue
     grep -q 'orenovpn-vpn-forward' "$file" && continue
 
-    # xt_policy の可用性テスト（一時チェーンに実際に入れてみる）
-    local policy_ok=0
+    # 使用する match が実際に通るかを一時チェーンで検証する。ここで確認せずに
+    # before.rules へ書くと iptables-restore が失敗し、ufw ごと有効化できなくなる。
+    # xt_policy（IPsec 判定）と xt_comment（目印）は別モジュールなので個別に確認する。
+    local policy_ok=0 comment_ok=0 cmt=""
     "$ipt" -N "$chain" >/dev/null 2>&1 || true
+    if "$ipt" -A "$chain" -s "$subnet" -m comment --comment orenovpn-probe -j ACCEPT >/dev/null 2>&1; then
+      comment_ok=1
+    fi
     if "$ipt" -A "$chain" -s "$subnet" -m policy --dir in --pol ipsec -j ACCEPT >/dev/null 2>&1; then
       policy_ok=1
     fi
     "$ipt" -F "$chain" >/dev/null 2>&1 || true
     "$ipt" -X "$chain" >/dev/null 2>&1 || true
+    if [ "$comment_ok" = 1 ]; then
+      cmt="-m comment --comment orenovpn-vpn-forward "
+    else
+      log "警告: xt_comment が使えないためルールに目印を付けません（doctor は policy 一致で判定）"
+    fi
 
     if [ "$policy_ok" = 1 ]; then
-      in_rule="-A ufw-before-forward -s ${subnet} -m policy --dir in --pol ipsec -m comment --comment orenovpn-vpn-forward -j ACCEPT"
-      out_rule="-A ufw-before-forward -d ${subnet} -m policy --dir out --pol ipsec -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment orenovpn-vpn-forward -j ACCEPT"
+      in_rule="-A ufw-before-forward -s ${subnet} -m policy --dir in --pol ipsec ${cmt}-j ACCEPT"
+      out_rule="-A ufw-before-forward -d ${subnet} -m policy --dir out --pol ipsec -m conntrack --ctstate ESTABLISHED,RELATED ${cmt}-j ACCEPT"
     else
       # xt_policy 不在時の代替: 送信元/宛先を VPN サブネットに限定する（IPsec 経由か
       # までは確認できないので、rp_filter と併せた弱い防御になる点は doctor が警告する）。
       log "警告: xt_policy が使えないため IPsec 判定なしの転送ルールにフォールバック（make doctor を確認）"
-      in_rule="-A ufw-before-forward -s ${subnet} -m comment --comment orenovpn-vpn-forward -j ACCEPT"
-      out_rule="-A ufw-before-forward -d ${subnet} -m conntrack --ctstate ESTABLISHED,RELATED -m comment --comment orenovpn-vpn-forward -j ACCEPT"
+      in_rule="-A ufw-before-forward -s ${subnet} ${cmt}-j ACCEPT"
+      out_rule="-A ufw-before-forward -d ${subnet} -m conntrack --ctstate ESTABLISHED,RELATED ${cmt}-j ACCEPT"
     fi
     sed -i "/^:ufw-before-forward /a ${in_rule}\n${out_rule}" "$file"
     log "IPsec 転送許可を ${file} に追記（VPN サブネット ${subnet} のみ）"
@@ -983,12 +995,21 @@ EOF
 #      localhost のみ・access-control でも VPN サブネットだけ許可の二重で塞ぐ。
 configure_dns_logging() {
   if [ "${ENABLE_DNS_LOGGING}" != "true" ]; then
+    # unbound の停止は「自分が置いた設定がある場合」に限る（利用者が別目的で
+    # 入れた unbound を止めないため）。一方 orenovpn が開けた 53 番の許可と
+    # DNS 用アドレスは、設定ファイルの有無に関わらず必ず撤去する（残すと
+    # VPN からサーバーの DNS へ到達できる状態が残る）。
     if [ -f /etc/unbound/unbound.conf.d/orenovpn.conf ]; then
       rm -f /etc/unbound/unbound.conf.d/orenovpn.conf
       systemctl disable --now unbound >/dev/null 2>&1 || true
-      systemctl disable --now orenovpn-dns-addr.service >/dev/null 2>&1 || true
       log "DNS 記録を無効化（unbound 停止）"
     fi
+    systemctl disable --now orenovpn-dns-addr.service >/dev/null 2>&1 || true
+    local pr
+    for pr in udp tcp; do
+      ufw delete allow from "${WG_SUBNET_V4}" to any port 53 proto "$pr" >/dev/null 2>&1 || true
+      ufw delete allow from "${WG_SUBNET_V6}" to any port 53 proto "$pr" >/dev/null 2>&1 || true
+    done
     return 0
   fi
   command -v unbound >/dev/null 2>&1 || { log "警告: unbound が無いため DNS 記録を構成できません"; return 0; }
@@ -1117,6 +1138,19 @@ EOF
 }
 
 configure_dns_logging
+
+# unbound を起動できず DNS 記録が無効化された場合、IKEv2 の swanctl.conf は
+# 「到達できないサーバーアドレス」を DNS として配布したままになる（DNS_SW は
+# setup_ikev2 の時点で決まり、unbound の起動可否はこの後で分かるため）。
+# 上流 DNS に戻して読み直す。記録より名前解決の維持を優先する。
+if [ "$VPN_PROTOCOL" = "ikev2" ] && [ "${ENABLE_DNS_LOGGING}" != "true" ] \
+   && grep -qE "^ *dns = ${WG_ADDRESS_V4}" /etc/swanctl/swanctl.conf 2>/dev/null; then
+  DNS_UPSTREAM="$(echo "${WG_DNS}" | sed 's/,/, /g')"
+  sed -i "s|^\( *dns = \).*|\1${DNS_UPSTREAM}|" /etc/swanctl/swanctl.conf
+  swanctl --load-all >/dev/null 2>&1 || true
+  log "警告: DNS 記録が無効なため配布 DNS を ${DNS_UPSTREAM} に戻しました（端末の再接続で反映）"
+fi
+
 configure_access_log
 
 # ---- 8. 通信監視・警告（watch.sh + systemd timer）--------------------------

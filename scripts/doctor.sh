@@ -35,11 +35,15 @@ fi
 if $S ufw status 2>/dev/null | grep -q "Status: active"; then pass "ufw 稼働中"; else wrn "ufw が非稼働"; fi
 
 # 1.5 転送の限定（踏み台化・外部から VPN 内への侵入の点検）
+# DROP 以外（ACCEPT・未設定・想定外の値）はすべて FAIL にする。
+# 未設定を "DROP" と表示して通すと、実際の値が分からないまま安全だと誤認する。
 FWD="$($S grep -E '^DEFAULT_FORWARD_POLICY=' /etc/default/ufw 2>/dev/null | cut -d'"' -f2)"
-if [ "$FWD" = "ACCEPT" ]; then
+if [ "$FWD" = "DROP" ]; then
+  pass "転送既定は DROP（VPN 用の転送のみ明示許可）"
+elif [ "$FWD" = "ACCEPT" ]; then
   bad "ufw の転送既定が ACCEPT（VPN 以外の通信まで中継＝踏み台/リフレクタ化）→ sudo /usr/local/sbin/setup.sh"
 else
-  pass "転送既定は ${FWD:-DROP}（VPN 用の転送のみ明示許可）"
+  bad "ufw の転送既定が DROP ではない（値: ${FWD:-未設定}）→ sudo /usr/local/sbin/setup.sh"
 fi
 if $S iptables -t nat -S POSTROUTING 2>/dev/null | grep -q -- '-j MASQUERADE'; then
   if $S iptables -t nat -S POSTROUTING 2>/dev/null | grep -- '-j MASQUERADE' | grep -qv -- '-s '; then
@@ -110,9 +114,12 @@ if [ "$PROTO" = "ikev2" ]; then
   else
     wrn "CRL 未配置（make setup を再実行して生成してください）"
   fi
-  # 外部から VPN サブネットへ入れる転送許可になっていないか
-  if $S iptables -S ufw-before-forward 2>/dev/null | grep -q 'orenovpn-vpn-forward'; then
-    if $S iptables -S ufw-before-forward 2>/dev/null | grep 'orenovpn-vpn-forward' | grep -q 'policy'; then
+  # 外部から VPN サブネットへ入れる転送許可になっていないか。
+  # xt_comment が使えない環境では目印が付かないため、VPN サブネット指定でも判定する。
+  FWDRULES="$($S iptables -S ufw-before-forward 2>/dev/null)"
+  if printf '%s\n' "$FWDRULES" | grep -q 'orenovpn-vpn-forward' \
+     || { [ -n "$SUB4" ] && printf '%s\n' "$FWDRULES" | grep -qF -- "-s ${SUB4}"; }; then
+    if printf '%s\n' "$FWDRULES" | grep -q -- '--pol ipsec'; then
       pass "IPsec 転送許可は policy 一致で限定（平文の外部パケットは転送しない）"
     else
       wrn "IPsec 転送許可が policy 一致なし（xt_policy 不在時の代替）。送信元偽装の余地が残る"
@@ -207,20 +214,31 @@ if [ "$ACCESSLOG" = "true" ]; then
 fi
 if [ "$DNSLOG" = "true" ]; then
   if $S systemctl is-active --quiet unbound 2>/dev/null; then pass "unbound 稼働中"; else bad "unbound が非稼働 → journalctl -u unbound"; fi
-  SRVIP="$(getenv SERVER_IP)"
-  # ss は指定するプロトコルによって Netid 列の有無が変わるため、列番号で拾うと取り違える
-  # （`ss -uln` には Netid 列が無く、$5 は Peer 側の "0.0.0.0:*" になる）。
-  # 列位置に依存せず、":53" で終わるフィールドをすべて拾う。
-  L53="$($S ss -uln 2>/dev/null | awk 'NR > 1 {for (i = 1; i <= NF; i++) if ($i ~ /:53$/) print $i}' | sort -u | tr '\n' ' ')"
+  # UDP だけでなく TCP も見る（DNS は TCP でも待受する。片方だけ外部に開いていても
+  # オープンリゾルバになる）。ss は指定するプロトコルによって Netid 列の有無が変わるため、
+  # 列番号で拾うと取り違える（`ss -uln` には Netid 列が無く $5 は Peer 側）。
+  # 列位置に依存せず ":53" で終わるフィールドをすべて拾う。
+  L53="$($S ss -lunt 2>/dev/null | awk 'NR > 1 {for (i = 1; i <= NF; i++) if ($i ~ /:53$/) print $i}' | sort -u | tr '\n' ' ')"
+  # 許可リスト方式で判定する（localhost と VPN 内アドレスのみ許可）。
+  # ワイルドカードやグローバル IP に限らず、想定外の待受は原則すべて拒否する。
+  SRV6="$(getenv WG_ADDRESS_V6)"
+  L53BAD=""
+  for a in $L53; do
+    case "$a" in
+      127.0.0.*:53|'[::1]:53') ;;
+      "${SRVADDR}:53") ;;
+      "[${SRV6}]:53") [ -n "$SRV6" ] || L53BAD="${L53BAD}${a} " ;;
+      *) L53BAD="${L53BAD}${a} " ;;
+    esac
+  done
   if $S iptables -t nat -S PREROUTING 2>/dev/null | grep -qE 'dport 53 -j DNAT'; then
     DNSDNAT=yes
   else
     DNSDNAT=no
   fi
-  if printf '%s' "$L53" | grep -qE '(^| )(0\.0\.0\.0|\*|\[::\]):53( |$)'; then
-    bad "DNS が全アドレスで待受＝オープンリゾルバの恐れ: ${L53}→ sudo /usr/local/sbin/setup.sh"
-  elif [ -n "$SRVIP" ] && printf '%s' "$L53" | grep -qF "${SRVIP}:53"; then
-    bad "DNS がグローバル IP で待受＝オープンリゾルバ: ${L53}→ sudo /usr/local/sbin/setup.sh"
+  if [ -n "$L53BAD" ]; then
+    bad "DNS が許可外のアドレスで待受＝オープンリゾルバの恐れ: ${L53BAD}→ sudo /usr/local/sbin/setup.sh
+       （許可されるのは localhost と VPN 内アドレス ${SRVADDR}${SRV6:+ / [${SRV6}]} のみ）"
   elif [ -n "$L53" ]; then
     pass "DNS 待受は VPN 内/localhost のみ: ${L53}"
   elif [ "$DNSDNAT" = yes ]; then

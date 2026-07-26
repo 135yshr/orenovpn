@@ -272,7 +272,9 @@ SPID="$(sudo bash -c "nohup timeout ${DURATION} python3 ${RUNDIR}/serve.py >${RU
 # サーバー側 watchdog: 手元の Ctrl-C / 回線切断 / SIGKILL に依存せず必ず閉じる。
 # （旧実装は手元スクリプトの trap だけが後片付けを担っていたため、切断時に ufw の穴と
 #   平文の配布物が残り続けた。）他の配信が動いていればポートは閉じない。
-sudo setsid nohup bash -c "sleep $((DURATION + 30)); kill ${SPID} >/dev/null 2>&1; sleep 1; pgrep -f 'orenovpn-serve/serve.py' >/dev/null 2>&1 || { ufw delete allow ${PORT}/tcp >/dev/null 2>&1; ufw delete allow 80/tcp >/dev/null 2>&1; rm -rf ${RUNDIR}; }" >/dev/null 2>&1 </dev/null &
+# PID を直接 kill すると、その PID が別プロセスに再利用されていた場合に無関係な
+# プロセスを落とす。記録した PID が本当に配信サーバーであることを確認してから止める。
+sudo setsid nohup bash -c "sleep $((DURATION + 30)); ps -p ${SPID} -o args= 2>/dev/null | grep -q orenovpn-serve/serve.py && kill ${SPID} >/dev/null 2>&1; sleep 1; pgrep -f 'orenovpn-serve/serve.py' >/dev/null 2>&1 || { ufw delete allow ${PORT}/tcp >/dev/null 2>&1; ufw delete allow 80/tcp >/dev/null 2>&1; rm -rf ${RUNDIR}; }" >/dev/null 2>&1 </dev/null &
 
 sleep 2
 if ! sudo ss -tln 2>/dev/null | grep -q ":${PORT} "; then

@@ -298,7 +298,7 @@ collect_active_identities() {
 }
 
 check_identity_ip_reuse() {
-  local now prune f tmp offenders
+  local now prune f tmp
   now="$(date +%s)"
   prune="$((now - PEER_IP_WINDOW))"
   f="$STATE_DIR/identity_ips"
@@ -315,23 +315,30 @@ check_identity_ip_reuse() {
     "$tmp" | sort >"$f"
   rm -f "$tmp"
 
-  offenders="$(awk -F'\t' -v th="$ALERT_PEER_IP_THRESHOLD" '
-    {c[$2]++; s[$2] = s[$2] " " $3}
-    END {for (i in c) if (c[i] + 0 >= th + 0) printf "  %s\n    接続元 %d 個:%s\n", i, c[i], s[i]}' "$f")"
-  if [ -n "$offenders" ]; then
-    alert "identity_reuse" \
-      "同一の VPN 資格情報が複数の接続元から使用（複製の疑い）" \
-      "1 つの鍵/証明書が直近 1 時間で ${ALERT_PEER_IP_THRESHOLD} 個以上の接続元 IP から使われました。
-設定ファイル/プロファイルが複製された可能性があります（正規の鍵で接続されるため
-「新規ピア」としては検知されません）。
+  # 識別子ごとに通知する。クールダウンのキーを 1 つに共有すると、別の識別子が
+  # 新たに複製されても先のアラートのクールダウン中は最大 1 時間抑制されてしまう
+  # （独立した侵害を取りこぼす）。識別子はファイル名に使えない文字を含みうるため
+  # ハッシュの先頭をキーにする。
+  local id count ips key
+  while IFS=$'\t' read -r id count ips; do
+    [ -n "${id:-}" ] || continue
+    key="identity_reuse_$(printf '%s' "$id" | sha256sum | cut -c1-12)"
+    alert "$key" \
+      "同一の VPN 資格情報が複数の接続元から使用（複製の疑い）: ${id}" \
+      "鍵/証明書「${id}」が直近 1 時間で ${count} 個の接続元 IP から使われました
+（閾値 ${ALERT_PEER_IP_THRESHOLD}）。設定ファイル/プロファイルが複製された可能性があります
+（正規の鍵で接続されるため「新規ピア」としては検知されません）。
 
-${offenders}
+  接続元:${ips}
+
   確認: sudo wg show ${WG_IFACE} / sudo swanctl --list-sas
   対処: 該当クライアントを作り直す（make remove NAME=x && make client NAME=x）
         IKEv2 は失効(CRL)が有効でないと止められません（make doctor で確認）
   ※ 回線切替の多い端末では正常でも出ます。続く場合は orenovpn.env の
      ALERT_PEER_IP_THRESHOLD を上げてください（現在 ${ALERT_PEER_IP_THRESHOLD}）。"
-  fi
+  done < <(awk -F'\t' -v th="$ALERT_PEER_IP_THRESHOLD" '
+    {c[$2]++; s[$2] = s[$2] " " $3}
+    END {for (i in c) if (c[i] + 0 >= th + 0) printf "%s\t%d\t%s\n", i, c[i], s[i]}' "$f")
 }
 
 # ---- テスト通知（make alerts-test / 手動確認用）----------------------------

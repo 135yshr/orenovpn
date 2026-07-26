@@ -160,17 +160,23 @@ cmd_remove() {
     reason="失効機能が無効（enable_cert_revocation=false で構築されている）"
   elif [ ! -f "${PKI}/${name}-cert.pem" ]; then
     reason="証明書の原本 ${PKI}/${name}-cert.pem が無く、失効対象を特定できない"
-  elif ! out="$(openssl ca -config "${PKI}/ca.cnf" -revoke "${PKI}/${name}-cert.pem" 2>&1)"; then
+  elif out="$(openssl ca -config "${PKI}/ca.cnf" -revoke "${PKI}/${name}-cert.pem" 2>&1)" \
+       || printf '%s' "$out" | grep -qi 'already revoked'; then
+    # 失効登録は完了している（今回 or 以前の実行で）。CRL の生成・配置へ進む。
+    # 「既に失効済み」を成功として扱わないと、CRL 生成だけ失敗したときに
+    # 再実行しても -revoke で止まり、CRL を publish できないまま詰む。
+    if out="$(openssl ca -gencrl -config "${PKI}/ca.cnf" -out "${PKI}/crl.pem" 2>&1)"; then
+      mkdir -p /etc/swanctl/x509crl
+      install -m644 "${PKI}/crl.pem" /etc/swanctl/x509crl/orenovpn.crl
+      swanctl --load-all >/dev/null 2>&1 || true
+      revoked=1
+    else
+      reason="失効登録は済んだが CRL の生成に失敗（証明書を残すので make remove を再実行すれば復旧できる）
+   詳細: $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')"
+    fi
+  else
     reason="openssl ca -revoke に失敗（失効を有効化する前に発行された証明書は CA DB 未登録のため失効できない）
    詳細: $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')"
-  elif ! out="$(openssl ca -gencrl -config "${PKI}/ca.cnf" -out "${PKI}/crl.pem" 2>&1)"; then
-    reason="CRL の生成に失敗
-   詳細: $(printf '%s' "$out" | tail -n 2 | tr '\n' ' ')"
-  else
-    mkdir -p /etc/swanctl/x509crl
-    install -m644 "${PKI}/crl.pem" /etc/swanctl/x509crl/orenovpn.crl
-    swanctl --load-all >/dev/null 2>&1 || true
-    revoked=1
   fi
 
   # 失効できていない場合は証明書の原本を消さない（消すと将来も失効できなくなる）。

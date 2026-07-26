@@ -119,9 +119,8 @@ QR を使わない/使えない場合。`.mobileconfig` を Mac にダウンロ�
 make profile NAME=iphone           # ./iphone.mobileconfig を 0600 で保存
 ```
 
-**AirDrop（端末間で直接渡る）を使ってください。** メール・クラウドストレージ・チャットは
-履歴に資格情報が残るため避けます。端末へインストールしたら手元のファイルは削除します
-（`rm iphone.mobileconfig`）。
+端末への渡し方は次の「2. iPhone へ渡してインストール」を参照してください。
+インストールが終わったら手元のファイルは削除します（`rm iphone.mobileconfig`）。
 
 ### 2. iPhone へ渡してインストール
 

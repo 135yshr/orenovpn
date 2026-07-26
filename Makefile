@@ -29,6 +29,10 @@ SCP = scp -P $(SSH_PORT) $(if $(strip $(SSH_KEY)),-i $(SSH_KEY),)
 # 生じるため）。使う側は $$NAME を参照する。
 export NAME
 
+# HOURS も同様に環境変数として渡す（コマンドラインだけでなく orenovpn.local.mk で
+# 定義した場合もレシピのシェルへ届くようにする）。
+export HOURS
+
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
