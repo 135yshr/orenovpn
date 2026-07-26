@@ -24,9 +24,9 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | 対象 | 手段 | 負荷 |
 |------|------|------|
 | サーバーへの不審アクセス | `journalctl` の SSH 認証失敗数を集計し閾値判定 | ほぼゼロ |
-| 新規 VPN 接続 | `wg show latest-handshakes` / `swanctl --list-sas` を前回と差分 | ほぼゼロ |
+| 新規 VPN 接続 | `wg show latest-handshakes` / `swanctl --list-sas` を前回と差分。接続が 0 件の状態も記録するため「未接続 → 接続」の遷移で通知される（1セッション1通・同種は1時間クールダウン）| ほぼゼロ |
 | 不審な出口通信 | ipset(`orenovpn_blocklist`) + before.rules の LOG で FORWARD を検知（ログのみ・ドロップしない） | 中 |
-| トラフィック量の異常 | 転送バイトの前回比増分を閾値判定 | ほぼゼロ |
+| トラフィック量の異常 | 転送バイトの前回比増分を閾値判定。WireGuard は `wg show transfer`、IKEv2 は `swanctl --list-sas` の CHILD_SA 転送量を合算（policy ベースの IPsec には `ipsec0` のようなインターフェイスが無いため）| ほぼゼロ |
 | **資格情報の複製** | 同一のピア公開鍵 / 証明書 ID が直近 1 時間に複数の接続元 IP から使われたら警告 | ほぼゼロ |
 
 > 「新規 VPN 接続」は**未知の鍵**しか見ません。設定ファイルやプロファイルを丸ごと

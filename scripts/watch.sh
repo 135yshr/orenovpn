@@ -176,14 +176,24 @@ ${newlist}
 # ---- (2) 新規 VPN 接続（IKEv2/IPsec）---------------------------------------
 check_new_peers_ikev2() {
   command -v swanctl >/dev/null 2>&1 || return 0
-  local prevfile curfile newlist
+  local prevfile curfile newlist sas
   prevfile="$STATE_DIR/ikev2_remotes"
   curfile="$STATE_DIR/ikev2_remotes.cur"
-  swanctl --list-sas 2>/dev/null \
+  # 「swanctl が失敗した」と「接続が 0 件」を区別する。失敗時は状態を触らない
+  # （空で上書きすると次回に全接続を新規扱いして誤検知する）。
+  if ! sas="$(swanctl --list-sas 2>/dev/null)"; then
+    logg "swanctl --list-sas に失敗（前回の状態を維持）"
+    return 0
+  fi
+  # 接続が 0 件でも空ファイルとして必ず記録する。ここで空を書かないと prevfile が
+  # 作られず、「接続ゼロ → 初回接続」の遷移が永久に検知できない（初回接続で
+  # メールが来ない原因だった）。
+  : >"$curfile"
+  printf '%s\n' "$sas" \
     | grep -oE 'remote [^ ]+|[0-9]{1,3}(\.[0-9]{1,3}){3}\[[0-9]+\]' \
-    | sort -u >"$curfile" || true
+    | sort -u >>"$curfile" || true
 
-  if [ -f "$prevfile" ] && [ -s "$curfile" ]; then
+  if [ -f "$prevfile" ]; then
     newlist="$(comm -23 "$curfile" <(sort -u "$prevfile") || true)"
     if [ -n "$newlist" ]; then
       alert "new_peer" \
@@ -193,14 +203,11 @@ check_new_peers_ikev2() {
 新規リモート:
 ${newlist}
 
-  確認: sudo swanctl --list-sas"
+  確認: sudo swanctl --list-sas
+  ※ 同じ端末が同じ接続元 IP から再接続した場合は（既知のため）通知しません。"
     fi
   fi
-  if [ -s "$curfile" ]; then
-    mv "$curfile" "$prevfile"
-  else
-    rm -f "$curfile"
-  fi
+  mv "$curfile" "$prevfile"
 }
 
 # ---- (3) 不審な出口通信（既知悪性 IP。ログのみ・ドロップしない）------------
@@ -233,6 +240,14 @@ check_traffic() {
   if [ "$VPN_PROTOCOL" = "wireguard" ] && command -v wg >/dev/null 2>&1; then
     cur="$(wg show "$WG_IFACE" transfer 2>/dev/null \
       | awk '{rx += $2; tx += $3} END {print rx + tx + 0}')"
+  elif [ "$VPN_PROTOCOL" = "ikev2" ] && command -v swanctl >/dev/null 2>&1; then
+    # policy ベースの IPsec には ipsec0 のようなインターフェイスが無く、
+    # /sys/class/net からは転送量が取れない（この分岐が無いと IKEv2 では
+    # トラフィック監視が一切動かなかった）。CHILD_SA の転送量を合算する。
+    # 「<数値> bytes,」の直前の数値を拾う。鍵の再生成でカウンタが 0 に戻るため
+    # 減少時は下の cur >= prev 判定で差分を取らない。
+    cur="$(swanctl --list-sas 2>/dev/null \
+      | awk '{for (i = 1; i < NF; i++) if ($(i + 1) ~ /^bytes/) s += $i} END {print s + 0}')"
   elif [ -d /sys/class/net/ipsec0/statistics ]; then
     cur="$(( $(cat /sys/class/net/ipsec0/statistics/rx_bytes 2>/dev/null || echo 0) \
             + $(cat /sys/class/net/ipsec0/statistics/tx_bytes 2>/dev/null || echo 0) ))"
