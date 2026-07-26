@@ -58,6 +58,7 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 - **アクセス先の記録ルールは `nat PREROUTING` に置く**（`FORWARD` や `ufw-before-forward` ではない）。WireGuard は `wg0.conf` の PostUp が FORWARD 先頭で ACCEPT するため、ufw のチェーンにパケットが到達せず**ログが一切出ない**（既存の出口ブロックリスト検知が WireGuard で発火しないのはこれが理由）。ルールの適用は `orenovpn-fwlog.service`（check-then-add で冪等）が担う。`before.rules` に書くと `ufw reload` が noflush で再適用して二重登録になる。
 - **DNS 記録の `unbound` は VPN 内アドレスと localhost にしか待受させない**（`access-control` でも VPN サブネットのみ許可）。外部に開くとオープンリゾルバ＝増幅攻撃の踏み台になる。また unbound が動いていないときは DNS の DNAT を入れない（記録より名前解決の維持を優先）。
 - **IKEv2 の証明書失効(CRL)は既定 ON**（`enable_cert_revocation = true`）。OFF にすると `make remove` が「ファイル削除だけ」になり、漏洩した証明書を 10 年間止められない。`ikev2-client remove` は失効できなかった場合に証明書の原本を**残す**（消すと将来も失効できなくなる）。
+- **`make setup` は VPN を切断した状態で実行する**。途中で strongSwan / wg-quick を再起動するため、VPN 経由の SSH（フルトンネルなのでサーバーへの SSH もトンネル内を通る）だと接続ごと切れて構成が中断する。setup.sh は `SSH_CONNECTION` の接続元が VPN サブネット内なら実行を拒否する（`ORENOVPN_ALLOW_VPN_SETUP=1` で上書き可）。
 - **SSH は 22 番固定**（Debian の SSH ソケットアクティベーションでポート変更が反映されず接続不能になり得るため機能として持たない）。防御は鍵認証＋fail2ban＋`allowed_ssh_cidr`。
 - **`NAME` 引数のインジェクション対策**: Makefile は `NAME` をレシピ文字列に展開せず `export NAME` で環境変数として渡し、`NAMECHECK`（英数・ハイフン・アンダースコアのみ）で検証してから `$$NAME` を参照する。クライアント名を扱う新ターゲットでも必ず `@$(NAMECHECK)` を冒頭に置き、同じ方式を守る。
 - OS は cloud-init + apt 前提のため **Debian / Ubuntu 系のみ**（RHEL 系不可）。512MB プランでは `setup.sh` が apt のメモリ不足を防ぐため swap を確保する。
