@@ -117,7 +117,12 @@ alerts-test: ## 通信監視のテストメールを送信（設定確認用）
 	@$(SSH) 'sudo orenovpn-watch test'
 
 alerts-status: ## 通信監視 timer の状態と直近ログを表示
-	@$(SSH) 'systemctl status orenovpn-watch.timer --no-pager || true; echo; sudo journalctl -u orenovpn-watch --no-pager -n 20 || true'
+# systemctl status は timer 未導入/停止時に非 0 を返すのでそれは許容する（状態表示自体が目的）。
+# 一方 journalctl の失敗を握り潰すと「ログが読めない」と「警告が一度も出ていない」が
+# 見分けられなくなるため、失敗時は必ず理由を表示する。
+	@$(SSH) 'systemctl status orenovpn-watch.timer --no-pager || true; echo; \
+	  sudo journalctl -u orenovpn-watch --no-pager -n 20 \
+	    || echo "[WARN] journal を読めませんでした（権限不足かログ未初期化。警告が無いこととは別です）→ サーバー上で sudo journalctl -u orenovpn-watch を実行して確認してください"'
 
 configure-alerts: ## 既存サーバーにアラート設定を反映（対話入力・state に残さない）
 	@ORENOVPN_SSH="$(SSH)" bash scripts/configure-alerts.sh

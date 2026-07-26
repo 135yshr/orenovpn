@@ -16,6 +16,11 @@ WGPORT="$(getenv WG_PORT)"
 V6="$(getenv WG_ENABLE_IPV6)"
 CRL="$(getenv ENABLE_CERT_REVOCATION)"
 SUB4="$(getenv WG_SUBNET_V4)"
+# サーバー自身の VPN 内アドレス。プロトコル別のブロック（IKEv2 のプール衝突検査）と
+# プロトコル共通のブロック（DNS 待受の許可リスト）の両方で使うため、ここで必ず定義する。
+# 片方のブロックだけで代入すると set -u により WireGuard 構成で doctor が途中終了する。
+SRVADDR="$(getenv WG_ADDRESS_V4)"
+SRV6="$(getenv WG_ADDRESS_V6)"
 
 ok=0; warn=0; fail=0
 pass() { echo "[ OK ] $*"; ok=$((ok + 1)); }
@@ -95,7 +100,6 @@ if [ "$PROTO" = "ikev2" ]; then
   fi
   # プールがサーバー自身のアドレスを払い出すと、クライアントの住所と配布DNSが同じになり
   # 名前解決できず、戻り通信もサーバーに吸われて「VPN は張れるが通信できない」状態になる。
-  SRVADDR="$(getenv WG_ADDRESS_V4)"
   if [ -n "$SRVADDR" ] && $S swanctl --list-pools 2>/dev/null | grep -qF "${SRVADDR}-"; then
     bad "アドレスプールの先頭がサーバー自身の ${SRVADDR}（クライアントと衝突し通信不可）→ sudo /usr/local/sbin/setup.sh"
   elif [ -n "$SUB4" ] && $S grep -qF "addrs = ${SUB4}" /etc/swanctl/swanctl.conf 2>/dev/null; then
@@ -221,7 +225,6 @@ if [ "$DNSLOG" = "true" ]; then
   L53="$($S ss -lunt 2>/dev/null | awk 'NR > 1 {for (i = 1; i <= NF; i++) if ($i ~ /:53$/) print $i}' | sort -u | tr '\n' ' ')"
   # 許可リスト方式で判定する（localhost と VPN 内アドレスのみ許可）。
   # ワイルドカードやグローバル IP に限らず、想定外の待受は原則すべて拒否する。
-  SRV6="$(getenv WG_ADDRESS_V6)"
   L53BAD=""
   for a in $L53; do
     case "$a" in
