@@ -6,10 +6,12 @@
 ## 目次
 
 - [クライアント管理コマンド](#クライアント管理コマンド)
-- [iPhone / iPad から接続](#iphone--ipad-から接続)
+- [プロトコルによる接続方法の違い](#プロトコルによる接続方法の違い)
+- [iPhone / macOS から接続（IKEv2 標準VPN）](#iphone--macos-から接続ikev2-標準vpn)
+- [iPhone / iPad から接続（WireGuard）](#iphone--ipad-から接続wireguard)
 - [Android から接続](#android-から接続)
 - [Mac / Windows / Linux から接続](#mac--windows--linux-から接続)
-- [接続状態の確認](#接続状態の確認)
+- [接続状態の確認](#接続状態の確認)（通信監視・アクセス先の記録を含む）
 - [よくある操作](#よくある操作)
 
 ---
@@ -47,11 +49,11 @@
 | 導入 | QR スキャン | プロファイルをインストール |
 
 - WireGuard を使う場合 → [iPhone(WireGuard)](#iphone--ipad-から接続wireguard)
-- IKEv2 を使う場合 → [iPhone/Mac(IKEv2)](#iphone--macos-から接続ikev2標準vpn)
+- IKEv2 を使う場合 → [iPhone/Mac(IKEv2)](#iphone--macos-から接続ikev2-標準vpn)
 
 ---
 
-## iPhone / macOS から接続（IKEv2・標準VPN）
+## iPhone / macOS から接続（IKEv2 標準VPN）
 
 `vpn_protocol = "ikev2"` の場合。**アプリのインストールは不要**です。
 

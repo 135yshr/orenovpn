@@ -42,7 +42,10 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 - `setup.sh`: フェーズ2 の本体。
 - `serve-profile.sh`: `make serve-profile` の実体。VPS 上で一時 HTTPS + QR を立て iPhone に `.mobileconfig` を配布（Let's Encrypt 証明書使用）。
 - `list-images.sh` / `list-volume-types.sh`: ConoHa の有効な名前を照会するヘルパ。
-- `doctor.sh`: リモートで実行される診断。
+- `doctor.sh`: リモートで実行される診断。構成の退行検出もここに集約する（新しい不変条件を作ったら必ず検査を足す）。
+- `watch.sh`: 通信監視・警告の本体。`/usr/local/sbin/orenovpn-watch` として install され systemd timer が 5 分毎に実行。
+- `orenovpn-logs`: 記録したアクセス先（宛先IP / DNS）の表示・集計。`make access-log` / `dns-log` / `logs-status` の実体。
+- `configure-alerts.sh` / `configure-logging.sh`: 既存サーバーの `orenovpn.env` を SSH で更新して設定を反映する（cloud-init は初回のみ動くため、tfvars の変更は既存 VPS に届かない）。
 
 ### Terraform ファイル構成（`terraform/`）
 - `main.tf` インスタンス／ボリューム／鍵、`security.tf` セキュリティグループ、`variables.tf` 全変数（多くにデフォルトあり）、`outputs.tf`（`server_ip` / `admin_user` 等を Makefile が参照）、`providers.tf` / `versions.tf`。

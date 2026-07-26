@@ -21,7 +21,8 @@ VPN 構成・初期クライアント作成までを自動化します（フェ�
   トークン一致・Host 一致・ダウンロード回数と時間の上限つき一時配信）
 - 🔧 **設定は 1 ファイル** — `terraform.tfvars` を編集するだけ。最小 4 項目で動く
 - 🔒 **セキュア既定値** — SSH 鍵認証のみ・root/パスワード無効・最小ファイアウォール・fail2ban・自動更新
-- 🩺 **自己診断＋CI** — `make doctor` で実機点検、`make check`／GitHub Actions で変更を自動検証
+- 🩺 **自己診断＋CI** — `make doctor` で実機点検（転送の全許可・オープンリゾルバ・失効無効などの退行も検出）、`make check`／GitHub Actions で変更を自動検証
+- 📝 **記録と警告** — 接続先（宛先IP／ドメイン名）を記録し、資格情報の複製・悪性IPへの通信・SSH 総当たりをメール通知（既定OFF・[`docs/ALERTING.md`](docs/ALERTING.md)）
 - 🧩 **クライアント管理が簡単** — `make client NAME=<名前>` で鍵/証明書発行と QR/プロファイル配布
 - 📦 **テンプレート化** — 誰でも fork して自分の環境にすぐ展開可能
 
@@ -120,7 +121,10 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `make remove NAME=x` | クライアント x を削除 |
 | `make access-log` | 記録した接続先（宛先 IP/ポート）を表示・集計 |
 | `make dns-log` | 記録した DNS 問い合わせ（ドメイン名）を表示・集計 |
+| `make logs-status` | 記録機能の有効/無効・適用ルール・DNS 待受を確認 |
 | `make configure-logging ACCESS_LOG=on DNS_LOG=on` | 既存サーバーで記録を ON/OFF |
+| `make configure-alerts` | 既存サーバーへ監視・通知設定を反映（対話・state に残さない）|
+| `make alerts-test` / `make alerts-status` | 通知テスト送信 / 監視 timer の状態 |
 | `make ssh` | サーバーへ SSH |
 | `make images` / `make volume-types` | 利用可能な OS イメージ / ボリュームタイプを確認 |
 | `make destroy` | VPN を完全撤去 |
@@ -132,7 +136,8 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 まず用途に合った**プリセット**（`make preset PRESET=simple|balanced|hardened|ikev2`）で
 土台を作り、必要なら `terraform/terraform.tfvars` を個別に調整します
 （プリセットの比較は [`terraform/presets/README.md`](terraform/presets/README.md)、
-全変数の詳細は [`docs/SETUP.md`](docs/SETUP.md)）。よく変える項目:
+全変数の一覧は [`terraform/terraform.tfvars.example`](terraform/terraform.tfvars.example)、
+任意機能の使い分けは [`docs/SETUP.md`](docs/SETUP.md)）。よく変える項目:
 
 | 変数 | 既定値 | 説明 |
 |------|--------|------|
@@ -145,6 +150,7 @@ make serve-profile NAME=my-phone   # iPhone: Safari で QR をスキャンして
 | `wg_clients` | `["client1"]` | 初期作成クライアント |
 | `randomize_profile_port` | `false` | QR 配布ポートを apply 時にランダム化 |
 | `enable_cert_revocation` | `true` | IKEv2 証明書の失効(CRL)。`make remove` で実際に失効できる（**false にすると漏洩時に止められない**）|
+| `enable_traffic_alert` | `false` | 怪しい通信をメール通知（要 `alert_email` と送信設定。`smtp_mode="local"` なら外部 SMTP 不要）|
 | `enable_access_log` | `false` | 接続先（宛先 IP/ポート）を記録する（`make access-log`）|
 | `enable_dns_logging` | `false` | ドメイン名を記録する（サーバー上に unbound を立てる。`make dns-log`）|
 
@@ -185,12 +191,17 @@ orenovpn/
 │   ├── vpn-client               # プロトコル振り分け（wg/ikev2）
 │   ├── serve-profile.sh         # QR で構成プロファイルを一時配信
 │   ├── doctor.sh                # サーバー構成の自己診断
+│   ├── watch.sh                 # 通信監視・警告（orenovpn-watch として常駐 timer 実行）
+│   ├── orenovpn-logs            # アクセス先の記録の表示・集計（make access-log / dns-log）
+│   ├── configure-alerts.sh      # 既存サーバーへ監視・通知設定を反映（対話）
+│   ├── configure-logging.sh     # 既存サーバーで記録機能を ON/OFF
 │   ├── list-images.sh           # 利用可能な OS イメージの確認
 │   └── list-volume-types.sh     # 利用可能なボリュームタイプの確認
 └── docs/
     ├── SETUP.md                 # 詳細セットアップ
     ├── USAGE.md                 # 使い方（各デバイスからの接続・管理）
     ├── SECURITY.md              # セキュリティ設計と追加対策
+    ├── ALERTING.md              # 通信監視・警告とアクセス先の記録
     ├── TROUBLESHOOTING.md       # 構築ログ / ConoHa 固有の落とし穴
     └── RETROSPECTIVE.md         # 開発の振り返り（意思決定・KPT）
 ```
