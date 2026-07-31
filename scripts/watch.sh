@@ -256,7 +256,7 @@ ${newlist}
 # ---- (2) 新規 VPN 接続（IKEv2/IPsec）---------------------------------------
 check_new_peers_ikev2() {
   command -v swanctl >/dev/null 2>&1 || return 0
-  local prevfile curfile newlist sas
+  local prevfile curfile newlist sas halfopen
   prevfile="$STATE_DIR/ikev2_remotes"
   curfile="$STATE_DIR/ikev2_remotes.cur"
   # 「swanctl が失敗した」と「接続が 0 件」を区別する。失敗時は状態を触らない
@@ -269,22 +269,44 @@ check_new_peers_ikev2() {
   # 作られず、「接続ゼロ → 初回接続」の遷移が永久に検知できない（初回接続で
   # メールが来ない原因だった）。
   : >"$curfile"
+  # 「認証が完了した接続」だけを数える。ここを間違えると、UDP/500 に触っただけの
+  # ポートスキャンが「IKE_SA が確立されました」として通知される（実際に誤検知した）。
+  #   - swanctl --list-sas は IKE_SA_INIT だけ返した半開きの SA も CONNECTING として
+  #     列挙する。認証(IKE_AUTH)前なので相手の身元は不明で、remote の ID は '%any'
+  #     のまま。これは接続ではないので数えない。ESTABLISHED＝クライアント証明書が
+  #     CA で検証された、が唯一の「入られた」条件。
+  #   - remote 行だけを見る。行を選ばずに IP を拾うと local 行（サーバー自身の待受
+  #     アドレス）まで「新規リモート」として並んでしまう。
+  #   - 識別子は「証明書 ID @ 接続元 IP」。接続元ポートは再接続のたびに変わるため
+  #     含めない（含めると同じ端末の再接続が毎回「新規」になる）。
   printf '%s\n' "$sas" \
-    | grep -oE 'remote [^ ]+|[0-9]{1,3}(\.[0-9]{1,3}){3}\[[0-9]+\]' \
+    | awk '/^[^ \t].*, IKEv2,/ { est = (index($0, ", ESTABLISHED,") > 0); next }
+           est && $1 == "remote"' \
+    | grep -oE "remote '[^']+' @ [0-9a-fA-F.:]+" \
+    | sed -E "s/^remote '([^']+)' @ (.+)$/\1 @ \2/" \
     | sort -u >>"$curfile" || true
+
+  # 認証前で終わった SA はメールにはしないが、痕跡として journal には残す。
+  halfopen="$(printf '%s\n' "$sas" \
+    | awk '/^[^ \t].*, IKEv2,/ && index($0, ", ESTABLISHED,") == 0 {n++} END {print n + 0}')"
+  [ "${halfopen:-0}" -eq 0 ] \
+    || logg "認証前の IKE_SA ${halfopen} 件（スキャン等・接続は成立していないため通知しない）"
 
   if [ -f "$prevfile" ]; then
     newlist="$(comm -23 "$curfile" <(sort -u "$prevfile") || true)"
     if [ -n "$newlist" ]; then
       alert "new_peer" \
         "新規 VPN 接続を検知（IKEv2）" \
-        "新しいリモートから IKE_SA が確立されました。想定外なら証明書の管理を確認してください。
+        "クライアント証明書の認証に成功した接続(IKE_SA ESTABLISHED)が新しく現れました。
+心当たりが無ければ証明書の管理を確認してください。
 
-新規リモート:
+新規リモート（証明書 ID @ 接続元 IP）:
 ${newlist}
 
   確認: sudo swanctl --list-sas
-  ※ 同じ端末が同じ接続元 IP から再接続した場合は（既知のため）通知しません。"
+  対処: 身に覚えが無ければ該当クライアントを失効させる（make remove NAME=x）
+  ※ 認証前で終わった接続試行（ポートスキャン等）は通知しません。
+     切断後に再接続した場合は「新規」として通知します（1 セッション 1 通）。"
     fi
   fi
   mv "$curfile" "$prevfile"
