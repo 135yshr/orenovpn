@@ -41,9 +41,9 @@ NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME 
 # スクリプトを 1 本足すたびに 3 箇所 × 2 ターゲットの更新が必要で、転送漏れを招いた）。
 # 展開結果は 1 行のシェルコマンドになる。引用符や $ を含めないこと（レシピ側で
 # 'bash -o pipefail -c "..."' の二重引用の中へそのまま埋め込むため）。
-SCRIPT_FILES = scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh scripts/orenovpn-notify scripts/orenovpn-logs
-INSTALL_SCRIPTS = sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && sudo install -m 0755 /tmp/orenovpn-notify /usr/local/sbin/orenovpn-notify && sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh
-CLEAN_SCRIPTS = rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-notify /tmp/orenovpn-logs
+SCRIPT_FILES = scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh scripts/orenovpn-notify scripts/orenovpn-logs scripts/orenovpn-mcp-shell
+INSTALL_SCRIPTS = sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && sudo install -m 0755 /tmp/orenovpn-notify /usr/local/sbin/orenovpn-notify && sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && sudo install -m 0755 /tmp/orenovpn-mcp-shell /usr/local/sbin/orenovpn-mcp-shell && sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh
+CLEAN_SCRIPTS = rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-notify /tmp/orenovpn-logs /tmp/orenovpn-mcp-shell
 
 .PHONY: help preset init plan deploy apply status setup sync-scripts ssh doctor alerts-test alerts-status configure-alerts configure-logging access-log dns-log logs-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
 

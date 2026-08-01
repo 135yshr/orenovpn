@@ -193,10 +193,109 @@ make configure-alerts
 | `make configure-alerts` | 既存サーバーへアラート設定を反映（対話入力・state に残さない） |
 | `make alerts-test` | テスト通知メールを送信して SMTP 設定を確認 |
 | `make alerts-status` | 監視 timer の稼働状況と直近ログを表示 |
-| `make doctor` | 監視 timer・スクリプト・msmtp 設定の点検を含む自己診断 |
+| `make doctor` | 監視 timer・スクリプト・msmtp 設定・MCP 用鍵の点検を含む自己診断 |
+| `sudo orenovpn-logs egress [時間]` | 出口検知（既知悪性 IP への通信）の一覧と集計 |
+| `sudo orenovpn-logs blocklist <IP>` | その IP がブロックリストのどの範囲で一致したか |
+| `sudo orenovpn-logs clients` | 登録済みクライアントと VPN 内アドレスの対応 |
+
+## アラートを受け取った後の分析（orenovpn-mcp）
+
+メールは「何かが起きた」までしか伝えない。**その後の絞り込みはサーバー上のログを読む**
+必要がある。手作業なら次の順で追える。
+
+```bash
+make ssh                                        # サーバーへ入る
+sudo orenovpn-logs egress 24                    # 出口検知の宛先と接続元
+sudo orenovpn-logs blocklist 185.220.101.1      # その宛先がどの範囲で一致したか
+sudo orenovpn-logs clients                      # 接続元の VPN 内 IP からクライアント名を引く
+sudo orenovpn-logs access 10.66.66.2 24         # その端末の全宛先
+sudo orenovpn-logs dns 10.66.66.2 24            # その端末の DNS 問い合わせ（名前）
+```
+
+この一連の絞り込みを AI に任せるための口が
+[135yshr/orenovpn-mcp](https://github.com/135yshr/orenovpn-mcp)（読み取り専用の MCP サーバー）。
+上のコマンドと同じ `orenovpn-logs` を、SSH の forced command 越しに **JSON で**読む。
+新しい経路を増やしているのではなく、既存のコマンドに `--json` を足しただけなので、
+MCP が壊れても `make access-log` は今までどおり動く。
+
+### MCP 用の SSH 鍵を作って登録する
+
+**`admin` の鍵を流用しないこと。** `admin` は NOPASSWD sudo を持つため、
+ログを読ませるためにサーバーの管理権限ごと渡すことになる。専用の鍵を作り、
+`command=` で読み取り 6 コマンドだけに縛る。
+
+```bash
+# 1) 手元で MCP 専用の鍵を作る（パスフレーズなし。非対話で使うため）
+ssh-keygen -t ed25519 -f ~/.ssh/orenovpn-mcp -C orenovpn-mcp -N ''
+chmod 600 ~/.ssh/orenovpn-mcp
+
+# 2) ディスパッチャがサーバーに入っていることを確認（make setup / sync-scripts で配置される）
+make ssh
+ls -l /usr/local/sbin/orenovpn-mcp-shell
+
+# 3) 公開鍵を authorized_keys へ「必ず command= と restrict 付きで」追記する
+#    （手元で実行。1 行で入れる。行頭のオプションを付け忘れると全権の鍵になる）
+KEY="$(cat ~/.ssh/orenovpn-mcp.pub)"
+make ssh
+echo "command=\"/usr/local/sbin/orenovpn-mcp-shell\",restrict ${KEY}" \
+  | sudo tee -a ~/.ssh/authorized_keys
+exit
+
+# 4) ホスト鍵の指紋を控える（MCP 側は StrictHostKeyChecking=no を持たない）
+ssh-keyscan -t ed25519 "$(terraform -chdir=terraform output -raw server_ip)" \
+  | ssh-keygen -lf - 
+
+# 5) 点検（command=/restrict の付け忘れとディスパッチャの配置を検査する）
+make doctor
+```
+
+鍵コメントの `orenovpn-mcp` は `make doctor` が「MCP 用の鍵」を識別する目印なので消さない。
+`restrict` は `no-agent-forwarding` / `no-port-forwarding` / `no-pty` / `no-user-rc` /
+`no-X11-forwarding` をまとめて有効にする（OpenSSH 7.2 以降）。個別指定ではなく `restrict` を
+使うのは、将来 OpenSSH にオプションが増えても自動で追随させるため。
+
+動作確認（クライアント一覧が返り、それ以外は終了コードだけが返る）:
+
+```bash
+ssh -i ~/.ssh/orenovpn-mcp <admin_user>@<server_ip> clients   # JSON が返る
+ssh -i ~/.ssh/orenovpn-mcp <admin_user>@<server_ip> 'rm -rf /'  # 何も起きず exit 1
+ssh -i ~/.ssh/orenovpn-mcp <admin_user>@<server_ip> 'clients; id'  # 同上
+```
+
+### 何を読めるようになるか（境界）
+
+| `$SSH_ORIGINAL_COMMAND` | 実行されるもの |
+|---|---|
+| `egress <時間> <件数>` | `orenovpn-logs egress --json` |
+| `access <接続元IP> <時間>` | `orenovpn-logs access --json` |
+| `dns <接続元IP> <時間>` | `orenovpn-logs dns --json`（`0.0.0.0` は全接続元） |
+| `clients` | `orenovpn-logs clients --json` |
+| `blocklist <IP>` | `orenovpn-logs blocklist --json` |
+| `status` | `orenovpn-logs status --json` |
+
+**これで全部**であり、書き込み系（削除・失効・設定変更）は許可リストに入っていない。
+鍵が漏れても、AI が誤った判断をしても、この鍵では構成は壊れない。対処が必要なときは
+人が `make remove NAME=x` を実行する。
+
+`clients` の JSON に `PrivateKey` / `PresharedKey` は**含まれない**。分析に不要であり、
+返した瞬間に会話ログと AI の文脈へ資格情報が流れるため。
+
+呼び出しは journal に記録される（誰がいつ何を読んだか）:
+
+```bash
+sudo journalctl -t orenovpn-mcp-shell -n 50
+```
+
+**ログの中身は「読ませる相手」に届くデータであることを忘れないこと。** VPN を家族や同僚に
+配っているなら、その人たちの閲覧履歴（宛先 IP・問い合わせたドメイン名）が MCP を通じて
+AI の文脈に流れる。ローカルの stdio 接続なら手元で完結するが、HTTP コネクタとして公開すると
+経路が変わる。詳細は orenovpn-mcp の `docs/SECURITY.md`。
 
 ## セキュリティ上の注意
 
+- **MCP 用の鍵には必ず `command=` と `restrict` を付ける**（上記）。付け忘れると
+  「ログを読む鍵」ではなく「NOPASSWD sudo を持つサーバーの全権の鍵」になる。
+  `make doctor` がこの退行を検出する。
 - **SMTP パスワードは Terraform state と `/etc/orenovpn/orenovpn.env`（0600）に平文で残る。**
   - 送信専用アカウントやアプリパスワード（Gmail 等）を使い、被害を局所化する。
   - state に残したくない場合は、env に置かず `make setup` 後にサーバー上で `/etc/msmtprc` を

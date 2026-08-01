@@ -1,0 +1,166 @@
+#!/usr/bin/env bash
+#
+# orenovpn-mcp-shell : orenovpn-mcp（読み取り専用の MCP サーバー）用の
+#   forced command ディスパッチャ。
+#
+#   ~/.ssh/authorized_keys に次の形で登録された鍵から起動される:
+#
+#     command="/usr/local/sbin/orenovpn-mcp-shell",restrict ssh-ed25519 AAAA... orenovpn-mcp
+#
+#   forced command は鍵ごとに 1 つしか持てないため、実際に何を読むかは
+#   $SSH_ORIGINAL_COMMAND に入って渡る。ここで許可リストと突き合わせ、
+#   スクリプト内に固定で書いた引数で orenovpn-logs を実行する。
+#
+# ---------------------------------------------------------------------------
+# このスクリプトが唯一のセキュリティ境界である。
+#   admin ユーザーの NOPASSWD sudo は生きているため、ここを抜かれると全部抜ける。
+#   以下は変更してはいけない不変条件（docs/SECURITY.md）:
+#
+#   - $SSH_ORIGINAL_COMMAND をシェルに渡さない。eval も sh -c も使わない。
+#     read -ra で配列へ分解し、case で完全一致判定してから固定の引数で exec する
+#   - 引数は型で検証する（時間・件数＝整数、接続元＝IP アドレス書式）。
+#     「危険な文字を除去する」のではなく「読めるものだけ通す」形にする
+#   - 許可されないものはエラー内容を返さず終了コードのみ。
+#     何が許可されているかの手がかりを与えない
+#   - 許可リストは読み取り 6 コマンドのみ。書き込み系（削除・失効・設定変更）は
+#     置かない。鍵が漏れても AI が誤っても構成は壊れない、を境界として保つ
+#   - 呼び出しは journal に記録する（誰がいつ何を読んだかを追えるようにする）
+# ---------------------------------------------------------------------------
+#
+set -euo pipefail
+
+LOGS=/usr/local/sbin/orenovpn-logs
+
+# 引数の上限。MCP 側（internal/usecase/port/allowlist.go）と同じ値にする。
+# 上限を置くのは journalctl が長時間走り続けるのを防ぐため。
+MAX_HOURS=8760   # 24 * 365
+MAX_LIMIT=10000
+
+# 記録用。制御文字を落とし長さも切る（journal へそのまま流さない）。
+sanitize() { printf '%s' "${1:0:200}" | tr -c '[:print:]' '.'; }
+
+audit() {
+  local conn="${SSH_CONNECTION:-}"
+  logger -t orenovpn-mcp-shell -p authpriv.notice -- \
+    "from=${conn%% *} user=${USER:-$(id -un)} $*" 2>/dev/null || true
+}
+
+# 許可されない要求。理由も使い方も返さない（終了コードのみ）。
+deny() {
+  audit "denied cmd=$(sanitize "${SSH_ORIGINAL_COMMAND:-}")"
+  exit 1
+}
+
+is_uint() {
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#1}" -le 9 ] || return 1
+  return 0
+}
+
+in_range() { # $1=値 $2=最小 $3=最大
+  is_uint "$1" || return 1
+  [ "$1" -ge "$2" ] && [ "$1" -le "$3" ]
+}
+
+# IP アドレスの検証。orenovpn-logs 側にも同じ検証があるが、ここは境界なので
+# 独立して持つ（防御を 1 本に頼らない）。ゾーン付き(%eth0)は通さない。
+is_ipv4() {
+  local o parts
+  local IFS=.
+  read -ra parts <<<"$1"
+  [ "${#parts[@]}" -eq 4 ] || return 1
+  for o in "${parts[@]}"; do
+    case "$o" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#o}" -le 3 ] || return 1
+    [ "$o" -le 255 ] || return 1
+  done
+  return 0
+}
+
+is_ipv6() {
+  local a="$1" g n=0 parts
+  case "$a" in *:::*) return 1 ;; esac
+  case "${a#*::}" in *::*) return 1 ;; esac
+  case "$a" in :*) case "$a" in ::*) ;; *) return 1 ;; esac ;; esac
+  case "$a" in *:) case "$a" in *::) ;; *) return 1 ;; esac ;; esac
+  local IFS=:
+  read -ra parts <<<"$a"
+  for g in "${parts[@]}"; do
+    [ -n "$g" ] || continue
+    if [ "${g#*.}" != "$g" ]; then
+      is_ipv4 "$g" || return 1
+      n=$((n + 2))
+      continue
+    fi
+    [ "${#g}" -le 4 ] || return 1
+    n=$((n + 1))
+  done
+  [ "$n" -ge 1 ] && [ "$n" -le 8 ] || return 1
+  case "$a" in *::*) ;; *) [ "$n" -eq 8 ] || return 1 ;; esac
+  return 0
+}
+
+is_ip() {
+  case "$1" in
+    ''|*[!0-9A-Fa-f.:]*) return 1 ;;
+    *:*) is_ipv6 "$1" ;;
+    *)   is_ipv4 "$1" ;;
+  esac
+}
+
+# $SSH_ORIGINAL_COMMAND を配列へ分解する。read -ra は IFS で区切るだけで
+# シェルの解釈（展開・クォート・リダイレクト・; や | の連結）を一切行わない。
+# ここでシェルに渡すと 'clients; id' が通ってしまう。
+argv=()
+read -ra argv <<<"${SSH_ORIGINAL_COMMAND:-}" || true
+[ "${#argv[@]}" -ge 1 ] || deny
+
+[ -x "$LOGS" ] || deny
+
+case "${argv[0]}" in
+  egress)
+    # egress <時間> <件数>
+    [ "${#argv[@]}" -eq 3 ] || deny
+    in_range "${argv[1]}" 1 "$MAX_HOURS" || deny
+    in_range "${argv[2]}" 1 "$MAX_LIMIT" || deny
+    audit "ok cmd=egress hours=${argv[1]} limit=${argv[2]}"
+    exec sudo -n "$LOGS" egress --json "${argv[1]}" "${argv[2]}"
+    ;;
+  access)
+    # access <接続元IP> <時間>
+    [ "${#argv[@]}" -eq 3 ] || deny
+    is_ip "${argv[1]}" || deny
+    in_range "${argv[2]}" 1 "$MAX_HOURS" || deny
+    audit "ok cmd=access src=${argv[1]} hours=${argv[2]}"
+    exec sudo -n "$LOGS" access --json "${argv[1]}" "${argv[2]}"
+    ;;
+  dns)
+    # dns <接続元IP> <時間>。0.0.0.0 は「全接続元」を表す約束の値
+    # （出口検知の未解決判定で全件が要るときに使う）。
+    [ "${#argv[@]}" -eq 3 ] || deny
+    is_ip "${argv[1]}" || deny
+    in_range "${argv[2]}" 1 "$MAX_HOURS" || deny
+    audit "ok cmd=dns src=${argv[1]} hours=${argv[2]}"
+    exec sudo -n "$LOGS" dns --json "${argv[1]}" "${argv[2]}"
+    ;;
+  clients)
+    [ "${#argv[@]}" -eq 1 ] || deny
+    audit "ok cmd=clients"
+    exec sudo -n "$LOGS" clients --json
+    ;;
+  blocklist)
+    # blocklist <IP>
+    [ "${#argv[@]}" -eq 2 ] || deny
+    is_ip "${argv[1]}" || deny
+    audit "ok cmd=blocklist ip=${argv[1]}"
+    exec sudo -n "$LOGS" blocklist --json "${argv[1]}"
+    ;;
+  status)
+    [ "${#argv[@]}" -eq 1 ] || deny
+    audit "ok cmd=status"
+    exec sudo -n "$LOGS" status --json
+    ;;
+  *)
+    deny
+    ;;
+esac
