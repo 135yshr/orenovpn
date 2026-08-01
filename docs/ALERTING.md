@@ -111,7 +111,7 @@ ALERT_SSH_LOGIN_IGNORE_IPS="203.0.113.5 198.51.100.9" # 特定の接続元だけ
 | `smtp_host` / `smtp_port` / `smtp_user` | `"" / 587 / ""` | msmtp の送信設定 |
 | `smtp_password` | `""`（sensitive） | SMTP 認証パスワード |
 | `smtp_mode` | `"relay"` | `"relay"`=外部 SMTP へ msmtp でリレー / `"local"`=VPN 上の `dma` が宛先 MX へ直接配送（外部 SMTP 不要・待受なし）|
-| `mail_from` | `""` | 差出人。空なら `alert_email` を使う。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）|
+| `mail_from` | `""` | 差出人（`relay` / `local` の両モードで有効。優先順位は `mail_from` → `smtp_user` → `alert_email`）。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）。`relay` モードで認証付きリレー（Gmail 等）を使う場合は、そのアカウントで送信が許可されたアドレスにすること（不一致だとリレーに拒否される）|
 | `alert_ssh_fail_threshold` | `20` | 1 周期あたり SSH 認証失敗の警告閾値 |
 | `enable_ssh_login_alert` | `true` | SSH ログイン**成功**の通知 |
 | `alert_ssh_login_ignore_ips` | `[]` | ログイン通知から除外する接続元 IP（完全一致） |

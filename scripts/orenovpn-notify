@@ -64,7 +64,13 @@ send_mail() {
     logg "msmtp 不在のため送信スキップ: $subject"
     return 0
   fi
-  from="${SMTP_USER:-root@$HOST_LABEL}"
+  # 差出人の優先順位は setup.sh が書く /etc/msmtprc の from と必ず揃える
+  # （From ヘッダーとエンベロープがずれると SPF/DMARC のアライメントが崩れる）。
+  # 旧実装は SMTP_USER 未設定時に root@<hostname> を使っていたが、これは実在しない
+  # ドメインになりがちで、MAIL_FROM を設定しても relay モードでは無視されていた。
+  # ※ 認証付きリレー（Gmail 等）は From が認証アカウントと一致しないと拒否する。
+  #    MAIL_FROM を変える場合はそのリレーで送信が許可されたアドレスにすること。
+  from="${MAIL_FROM:-${SMTP_USER:-$ALERT_EMAIL}}"
   if {
     printf 'To: %s\n' "$ALERT_EMAIL"
     printf 'From: orenovpn <%s>\n' "$from"

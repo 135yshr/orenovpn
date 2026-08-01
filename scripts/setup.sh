@@ -94,7 +94,9 @@ if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
       echo "account        orenovpn"
       echo "host           ${SMTP_HOST}"
       echo "port           ${SMTP_PORT}"
-      echo "from           ${SMTP_USER:-$ALERT_EMAIL}"
+      # エンベロープ差出人。orenovpn-notify が付ける From ヘッダーと同じ優先順位に
+      # 揃える（ずれると SPF/DMARC のアライメントが崩れ、迷惑メール判定されやすい）。
+      echo "from           ${MAIL_FROM:-${SMTP_USER:-$ALERT_EMAIL}}"
       if [ "${SMTP_AUTH}" = "off" ]; then
         echo "auth           off"
       else
