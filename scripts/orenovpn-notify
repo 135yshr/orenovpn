@@ -1,0 +1,182 @@
+#!/usr/bin/env bash
+#
+# orenovpn-notify : 通知メールの送信口。/usr/local/sbin/orenovpn-notify に install される。
+#
+#   orenovpn-notify send <件名> <本文>
+#   orenovpn-notify client-change <added|removed> <名前> [詳細]
+#
+# watch.sh（定期監視）と wg-client / ikev2-client（クライアント管理）の両方から呼ぶ。
+# エンベロープ（From / Subject / charset、msmtp と dma の切替）をここだけに置き、
+# 送信経路が 2 系統に分かれて片方だけ壊れる状態を作らない。
+#
+# 送信できなかった場合も終了コード 0 で戻る。通知の失敗で VPN クライアントの
+# 作成・削除そのものを失敗させないため（呼び出し元は set -e で走っている）。
+#
+set -euo pipefail
+
+ENV_FILE=/etc/orenovpn/orenovpn.env
+# shellcheck disable=SC1090,SC1091
+[ -f "$ENV_FILE" ] && . "$ENV_FILE"
+
+: "${ALERT_EMAIL:=}"
+: "${SMTP_USER:=}"
+: "${SMTP_MODE:=relay}"
+: "${MAIL_FROM:=}"
+: "${VPN_PROTOCOL:=wireguard}"
+: "${ENABLE_TRAFFIC_ALERT:=false}"
+# クライアントの作成/削除を通知する。既定 ON（ENABLE_TRAFFIC_ALERT=true が前提）。
+: "${ENABLE_CLIENT_CHANGE_ALERT:=true}"
+
+MSMTP_CONF=/etc/msmtprc
+HOST_LABEL="$(hostname 2>/dev/null || echo orenovpn)"
+
+logg() { printf '[notify] %s\n' "$*" >&2; }
+
+# ---- メール送信（msmtp / dma）----------------------------------------------
+send_mail() {
+  local subject="$1" body="$2" from sm
+  if [ -z "$ALERT_EMAIL" ]; then
+    logg "ALERT_EMAIL 未設定のため送信スキップ: $subject"
+    return 0
+  fi
+  if [ "$SMTP_MODE" = "local" ]; then
+    sm="$(command -v sendmail 2>/dev/null || true)"
+    if [ -z "$sm" ] && [ -x /usr/sbin/sendmail ]; then sm=/usr/sbin/sendmail; fi
+    if [ -z "$sm" ]; then
+      logg "sendmail(dma) 不在のため送信スキップ: $subject"
+      return 0
+    fi
+    if {
+      printf 'To: %s\n' "$ALERT_EMAIL"
+      printf 'From: %s\n' "${MAIL_FROM:-$ALERT_EMAIL}"
+      printf 'Subject: [orenovpn] %s\n' "$subject"
+      printf 'Content-Type: text/plain; charset=UTF-8\n'
+      printf '\n'
+      printf '%s\n' "$body"
+    } | "$sm" -t; then
+      logg "通知送信(local/dma): $subject"
+    else
+      logg "通知送信失敗(local/dma): $subject"
+    fi
+    return 0
+  fi
+  if ! command -v msmtp >/dev/null 2>&1; then
+    logg "msmtp 不在のため送信スキップ: $subject"
+    return 0
+  fi
+  from="${SMTP_USER:-root@$HOST_LABEL}"
+  if {
+    printf 'To: %s\n' "$ALERT_EMAIL"
+    printf 'From: orenovpn <%s>\n' "$from"
+    printf 'Subject: [orenovpn] %s\n' "$subject"
+    printf 'Content-Type: text/plain; charset=UTF-8\n'
+    printf '\n'
+    printf '%s\n' "$body"
+    printf '\n-- \norenovpn watch @ %s (%s)\n' "$HOST_LABEL" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  } | msmtp --file="$MSMTP_CONF" "$ALERT_EMAIL"; then
+    logg "通知送信: $subject"
+  else
+    logg "通知送信失敗（msmtp 設定を確認）: $subject"
+  fi
+}
+
+# ---- 「誰がどこから実行したか」の特定 ---------------------------------------
+# sudo は既定で SSH_CONNECTION を環境から落とす。`make client` は
+# ssh → sudo vpn-client → wg-client と辿るため、自分の環境変数を見るだけでは
+# 接続元がほぼ常に空になる。root で動いているので親プロセスを遡って sshd から
+# 引き継がれた値を読む（資格情報が「どの管理セッションから」作られたかは、
+# この通知でいちばん価値のある情報なので空欄で済ませない）。
+ssh_peer() {
+  local conn pid depth=0
+  conn="${SSH_CONNECTION:-${SSH_CLIENT:-}}"
+  if [ -n "$conn" ]; then
+    printf '%s' "${conn%% *}"
+    return 0
+  fi
+  pid="${PPID:-1}"
+  while [ "${pid:-1}" -gt 1 ] && [ "$depth" -lt 20 ]; do
+    conn="$(tr '\0' '\n' <"/proc/${pid}/environ" 2>/dev/null \
+      | sed -n 's/^SSH_CONNECTION=//p' | head -n1 || true)"
+    if [ -n "$conn" ]; then
+      printf '%s' "${conn%% *}"
+      return 0
+    fi
+    pid="$(sed -n 's/^PPid:[[:space:]]*//p' "/proc/${pid}/status" 2>/dev/null || true)"
+    depth=$((depth + 1))
+  done
+  printf '不明（ローカル実行、または環境変数を辿れず）'
+}
+
+# ---- クライアントの作成/削除の通知 ------------------------------------------
+cmd_client_change() {
+  local action="${1:-}" name="${2:-}" detail="${3:-}"
+  [ -n "$action" ] && [ -n "$name" ] || { logg "client-change の引数が不足"; return 0; }
+
+  # 監視機能そのものが OFF なら送らない（ENABLE_TRAFFIC_ALERT が全体スイッチ）。
+  if [ "$ENABLE_TRAFFIC_ALERT" != "true" ] || [ "$ENABLE_CLIENT_CHANGE_ALERT" != "true" ]; then
+    return 0
+  fi
+  # setup.sh の初期クライアント作成など、通知が無意味な文脈からの抑制用。
+  [ -z "${ORENOVPN_SUPPRESS_NOTIFY:-}" ] || return 0
+
+  local subject lead howto actor peer stamp
+  actor="${SUDO_USER:-$(id -un 2>/dev/null || echo root)}"
+  peer="$(ssh_peer)"
+  stamp="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+
+  case "$action" in
+    added)
+      subject="VPN クライアントを作成: ${name}"
+      lead="VPN クライアントのプロファイルが新しく作成されました。
+プロファイルは VPN の資格情報そのものです。心当たりが無ければ、サーバーへの
+不正ログイン（SSH 鍵の漏洩）を疑ってください。"
+      howto="  対処: 身に覚えが無ければ削除する（make remove NAME=${name}）
+        SSH 鍵の漏洩が疑われる場合は鍵を入れ替える"
+      ;;
+    removed)
+      subject="VPN クライアントを削除: ${name}"
+      lead="VPN クライアントのプロファイルが削除されました。"
+      howto="  対処: 身に覚えが無ければサーバーへの不正ログインを疑い、SSH 鍵を入れ替える
+        意図しない削除なら作り直す（make client NAME=${name}）"
+      ;;
+    *)
+      logg "不明な client-change の種別: $action"
+      return 0
+      ;;
+  esac
+
+  send_mail "$subject" "${lead}
+
+  クライアント名: ${name}
+  プロトコル: ${VPN_PROTOCOL}
+  実行者: ${actor}
+  接続元: ${peer}
+  日時: ${stamp}
+${detail}
+
+  確認: sudo vpn-client list
+        sudo journalctl -u ssh --since '-1h' | grep Accepted
+${howto}
+  ※ 自分の操作（make client / make remove）でも届きます。止めるなら
+     /etc/orenovpn/orenovpn.env の ENABLE_CLIENT_CHANGE_ALERT=\"false\"。"
+}
+
+case "${1:-}" in
+  send)
+    shift
+    send_mail "${1:-（件名なし）}" "${2:-}"
+    ;;
+  client-change)
+    shift
+    cmd_client_change "$@"
+    ;;
+  *)
+    cat >&2 <<'EOF'
+使い方: orenovpn-notify <コマンド> [引数]
+
+  send <件名> <本文>                        任意の通知を送る（ゲートなし）
+  client-change <added|removed> <名前> [詳細]  クライアントの作成/削除を通知
+EOF
+    exit 1
+    ;;
+esac

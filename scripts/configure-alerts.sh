@@ -72,6 +72,14 @@ if [ "$SSHLOGIN" = "true" ]; then
   printf '自分の作業（make setup 等）のログインでも通知が届きます。\n' >&2
 fi
 
+# クライアント（プロファイル）の作成/削除の通知。プロファイルは資格情報そのもので、
+# root を取られると新しい鍵を発行されうる。作成イベントは居座り用の鍵に気付く手段。既定 ON。
+CC="$(prompt 'VPN クライアントの作成/削除をメールで通知しますか? [Y/n]: ')"
+case "$CC" in
+  [Nn]*) CLICHG=false ;;
+  *)     CLICHG=true ;;
+esac
+
 BL="$(prompt 'ALERT_BLOCKLIST_URL (任意・空でスキップ): ')"
 
 # env ファイル（bash が source する）へ安全に書けるよう \ " ` $ をエスケープ
@@ -88,6 +96,7 @@ fragment="$(
   printf 'SMTP_USER="%s"\n' "$(esc "$SU")"
   printf 'SMTP_PASSWORD="%s"\n' "$(esc "$PW")"
   printf 'ENABLE_SSH_LOGIN_ALERT="%s"\n' "$SSHLOGIN"
+  printf 'ENABLE_CLIENT_CHANGE_ALERT="%s"\n' "$CLICHG"
   printf 'ALERT_SSH_LOGIN_IGNORE_IPS="%s"\n' "$(esc "$SLIGN")"
   printf 'ALERT_BLOCKLIST_URL="%s"\n' "$(esc "$BL")"
 )"
@@ -103,7 +112,7 @@ ENVF=/etc/orenovpn/orenovpn.env
 new="$(mktemp)"
 frag="$(mktemp)"
 cat > "$frag"
-grep -vE "^(ENABLE_TRAFFIC_ALERT|SMTP_MODE|ALERT_EMAIL|MAIL_FROM|SMTP_HOST|SMTP_PORT|SMTP_AUTH|SMTP_USER|SMTP_PASSWORD|ENABLE_SSH_LOGIN_ALERT|ALERT_SSH_LOGIN_IGNORE_IPS|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
+grep -vE "^(ENABLE_TRAFFIC_ALERT|SMTP_MODE|ALERT_EMAIL|MAIL_FROM|SMTP_HOST|SMTP_PORT|SMTP_AUTH|SMTP_USER|SMTP_PASSWORD|ENABLE_SSH_LOGIN_ALERT|ENABLE_CLIENT_CHANGE_ALERT|ALERT_SSH_LOGIN_IGNORE_IPS|ALERT_BLOCKLIST_URL)=" "$ENVF" > "$new" || true
 cat "$frag" >> "$new"
 install -m 600 -o root -g root "$new" "$ENVF"
 rm -f "$new" "$frag"

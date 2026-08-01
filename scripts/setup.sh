@@ -111,6 +111,9 @@ if [ "${ENABLE_TRAFFIC_ALERT}" = "true" ]; then
     log "msmtp（外部SMTPリレー）を構成"
   fi
 
+  if [ ! -x /usr/local/sbin/orenovpn-notify ]; then
+    log "警告: /usr/local/sbin/orenovpn-notify が無い（メール送信の実体。make sync-scripts で転送されます）"
+  fi
   if [ ! -x /usr/local/sbin/orenovpn-watch ]; then
     log "警告: /usr/local/sbin/orenovpn-watch が無い（make setup で転送されます）"
   fi
@@ -805,6 +808,9 @@ fi
 # 7. 初期クライアント作成（vpn-client がプロトコルに応じて振り分け）
 # -----------------------------------------------------------------------------
 if [ -n "${WG_INITIAL_CLIENTS:-}" ] && command -v vpn-client >/dev/null 2>&1; then
+  # 作成通知は抑制する。ここは管理者自身が実行した make setup の一部であり、かつ
+  # メール送信の構成（8. 通信監視・警告）はこの後なので、送っても届かない。
+  export ORENOVPN_SUPPRESS_NOTIFY=1
   for client in ${WG_INITIAL_CLIENTS}; do
     # 再実行時に既存クライアントで「エラー」表示にならないよう、出力を捕捉して判定する。
     if out="$(vpn-client add "$client" --quiet 2>&1)"; then
@@ -815,6 +821,7 @@ if [ -n "${WG_INITIAL_CLIENTS:-}" ] && command -v vpn-client >/dev/null 2>&1; th
       log "クライアント ${client} の作成に失敗: ${out}"
     fi
   done
+  unset ORENOVPN_SUPPRESS_NOTIFY
 fi
 
 # -----------------------------------------------------------------------------

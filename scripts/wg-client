@@ -25,6 +25,13 @@ umask 077
 
 die() { echo "エラー: $*" >&2; exit 1; }
 
+# クライアントの作成/削除をメール通知する（不在・失敗でも処理は続行する）。
+NOTIFY=/usr/local/sbin/orenovpn-notify
+notify_client() {
+  [ -x "$NOTIFY" ] || return 0
+  "$NOTIFY" client-change "$@" || true
+}
+
 require_root() {
   [ "$(id -u)" -eq 0 ] || die "root 権限で実行してください（sudo wg-client ...）"
 }
@@ -112,6 +119,12 @@ EOF
 
   reload_wg
 
+  # 公開鍵も載せる。「新規 VPN 接続を検知（WireGuard）」の通知はピア公開鍵で
+  # 相手を示すため、作成時の鍵を控えておくと後で突き合わせられる。
+  notify_client added "$name" "  VPN IP: ${client_v4}
+  ピア公開鍵: ${pub}
+  設定ファイル: ${CLIENT_DIR}/${name}.conf"
+
   if [ "$quiet" != "--quiet" ]; then
     echo "クライアント '${name}' を追加しました（VPN IP: ${client_v4}）"
     echo
@@ -139,6 +152,8 @@ cmd_remove() {
 
   rm -f "${CLIENT_DIR}/${name}.conf"
   reload_wg
+  notify_client removed "$name" "  ピア公開鍵: ${pub:-（取得できず）}
+  この鍵ではサーバー側にピアが残らないため、以後は接続できません。"
   echo "クライアント '${name}' を削除しました"
 }
 

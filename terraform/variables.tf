@@ -360,6 +360,19 @@ variable "enable_ssh_login_alert" {
   default     = true
 }
 
+variable "enable_client_change_alert" {
+  description = <<-EOT
+    VPN クライアント（プロファイル）の作成・削除をメールで通知する
+    （enable_traffic_alert = true のときのみ動作）。
+    プロファイルは VPN の資格情報そのもので、サーバーに root で入れる者は誰でも
+    新しい鍵を発行できる。作成イベントの通知は「侵入後に居座るための鍵を作られた」
+    ことに気付く手段になる。削除側は IKEv2 の失効(CRL)に成功したかも併せて知らせる。
+    自分の make client / make remove でも届く（5 分周期ではなく即時）。
+  EOT
+  type        = bool
+  default     = true
+}
+
 variable "alert_ssh_login_ignore_ips" {
   description = "SSH ログイン通知から除外する接続元 IP（完全一致）。自分の固定 IP など"
   type        = list(string)
