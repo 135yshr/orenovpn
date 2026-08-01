@@ -36,6 +36,15 @@ export HOURS
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
+# サーバーへ転送するスクリプトと、その install / 後片付け手順。
+# setup と sync-scripts が同じ手順を使うため 1 箇所にまとめる（別々に書いていた頃は
+# スクリプトを 1 本足すたびに 3 箇所 × 2 ターゲットの更新が必要で、転送漏れを招いた）。
+# 展開結果は 1 行のシェルコマンドになる。引用符や $ を含めないこと（レシピ側で
+# 'bash -o pipefail -c "..."' の二重引用の中へそのまま埋め込むため）。
+SCRIPT_FILES = scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh scripts/orenovpn-notify scripts/orenovpn-logs
+INSTALL_SCRIPTS = sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && sudo install -m 0755 /tmp/orenovpn-notify /usr/local/sbin/orenovpn-notify && sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh
+CLEAN_SCRIPTS = rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-notify /tmp/orenovpn-logs
+
 .PHONY: help preset init plan deploy apply status setup sync-scripts ssh doctor alerts-test alerts-status configure-alerts configure-logging access-log dns-log logs-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
 
 # HOURS（記録の参照範囲）を整数に検証し、未指定なら 6 にする。各レシピの先頭で呼ぶ。
@@ -80,29 +89,14 @@ status: ## サーバーの初回ブート完了(SSH疎通)を待つ
 
 setup: ## ソフト導入・VPN構成を実行（deploy後・観察しながら）
 	@echo "スクリプトを転送中..."
-	@$(SCP) scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh scripts/orenovpn-logs $(SSH_USER)@$(SSH_HOST):/tmp/
+	@$(SCP) $(SCRIPT_FILES) $(SSH_USER)@$(SSH_HOST):/tmp/
 	@echo "サーバー上で構成を実行します（出力を確認してください）..."
-	@$(SSH) 'bash -o pipefail -c "\
-	         sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && \
-	         sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && \
-	         sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && \
-	         sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && \
-	         sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && \
-	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
-	         sudo /usr/local/sbin/setup.sh 2>&1 | sudo tee /var/log/orenovpn-setup.log && \
-	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-logs"'
+	@$(SSH) 'bash -o pipefail -c "$(INSTALL_SCRIPTS) && sudo /usr/local/sbin/setup.sh 2>&1 | sudo tee /var/log/orenovpn-setup.log && $(CLEAN_SCRIPTS)"'
 
 sync-scripts: ## サーバー上のスクリプトだけを最新に更新（setup.sh は実行しない）
 	@echo "スクリプトを転送中..."
-	@$(SCP) scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/vpn-client scripts/watch.sh scripts/orenovpn-logs $(SSH_USER)@$(SSH_HOST):/tmp/
-	@$(SSH) 'bash -o pipefail -c "\
-	         sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && \
-	         sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && \
-	         sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && \
-	         sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && \
-	         sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && \
-	         sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh && \
-	         rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-logs"'
+	@$(SCP) $(SCRIPT_FILES) $(SSH_USER)@$(SSH_HOST):/tmp/
+	@$(SSH) 'bash -o pipefail -c "$(INSTALL_SCRIPTS) && $(CLEAN_SCRIPTS)"'
 	@echo "✅ スクリプトを更新しました。"
 	@echo "   ※ サーバー構成そのもの（ufw / unbound / 記録ルール等）の反映には make setup が必要です。"
 

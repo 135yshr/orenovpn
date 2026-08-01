@@ -66,6 +66,7 @@ locals {
     mail_from                  = var.mail_from
     alert_ssh_fail_threshold   = var.alert_ssh_fail_threshold
     enable_ssh_login_alert     = var.enable_ssh_login_alert
+    enable_client_change_alert = var.enable_client_change_alert
     alert_ssh_login_ignore_ips = var.alert_ssh_login_ignore_ips
     alert_traffic_mbytes       = var.alert_traffic_mbytes
     alert_blocklist_url        = var.alert_blocklist_url

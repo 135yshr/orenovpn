@@ -151,6 +151,8 @@ ALERT="$(getenv ENABLE_TRAFFIC_ALERT)"
 if [ "$ALERT" = "true" ]; then
   if $S systemctl is-active --quiet orenovpn-watch.timer 2>/dev/null; then pass "監視 timer(orenovpn-watch) 稼働中"; else bad "orenovpn-watch.timer が非稼働 → systemctl status orenovpn-watch.timer"; fi
   if $S test -x /usr/local/sbin/orenovpn-watch; then pass "監視スクリプト配置あり"; else bad "/usr/local/sbin/orenovpn-watch が無い（make setup 再実行）"; fi
+  # 送信の実体。これが無いと監視もクライアント通知も「黙って」全滅する。
+  if $S test -x /usr/local/sbin/orenovpn-notify; then pass "通知スクリプト(orenovpn-notify) 配置あり"; else bad "/usr/local/sbin/orenovpn-notify が無い → メールが一切送られません（make sync-scripts）"; fi
   SMTP_MODE="$(getenv SMTP_MODE)"; SMTP_MODE="${SMTP_MODE:-relay}"
   if [ "$SMTP_MODE" = "local" ]; then
     if command -v sendmail >/dev/null 2>&1 || [ -x /usr/sbin/sendmail ] || [ -x /usr/sbin/dma ]; then
@@ -174,6 +176,13 @@ if [ "$ALERT" = "true" ]; then
     if [ -n "$IGN" ]; then echo "[INFO] SSH ログイン通知の除外 IP: ${IGN}"; fi
   else
     echo "[INFO] SSH ログイン成功の通知は無効（ENABLE_SSH_LOGIN_ALERT!=true）"
+  fi
+  # クライアントの作成/削除の通知（env 未設定の既存サーバーは既定 ON と同じ扱い）
+  CLICHG="$(getenv ENABLE_CLIENT_CHANGE_ALERT)"
+  if [ "${CLICHG:-true}" = "true" ]; then
+    pass "クライアント作成/削除の通知 有効"
+  else
+    echo "[INFO] クライアント作成/削除の通知は無効（ENABLE_CLIENT_CHANGE_ALERT!=true）"
   fi
   BLOCKLIST="$(getenv ALERT_BLOCKLIST_URL)"
   if [ -n "$BLOCKLIST" ]; then

@@ -27,10 +27,8 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 # ---- 既定値（env 未設定でも安全側で動く）----------------------------------
 : "${VPN_PROTOCOL:=wireguard}"
 : "${ENABLE_TRAFFIC_ALERT:=false}"
-: "${ALERT_EMAIL:=}"
-: "${SMTP_USER:=}"
-: "${SMTP_MODE:=relay}"
-: "${MAIL_FROM:=}"
+# 宛先・SMTP 系（ALERT_EMAIL / SMTP_* / MAIL_FROM）の既定値は orenovpn-notify 側に置く。
+# 両方で既定を持つと片方だけ変えたときに挙動がずれるため、ここには重複させない。
 : "${ALERT_SSH_FAIL_THRESHOLD:=20}"
 : "${ALERT_TRAFFIC_MBYTES:=1024}"
 : "${ALERT_BLOCKLIST_URL:=}"
@@ -53,59 +51,23 @@ PEER_IP_WINDOW=3600
 SSH_LOGIN_WINDOW=3600
 SSH_LOGIN_MAX_LINES=20
 TAB="$(printf '\t')"
-MSMTP_CONF=/etc/msmtprc
-HOST_LABEL="$(hostname 2>/dev/null || echo orenovpn)"
+NOTIFY=/usr/local/sbin/orenovpn-notify
 
 logg() { printf '[watch] %s\n' "$*" >&2; }
 
 mkdir -p "$STATE_DIR" "$COOLDOWN_DIR"
 
-# ---- メール送信（msmtp 経由）----------------------------------------------
+# ---- メール送信 -------------------------------------------------------------
+# 実体は orenovpn-notify に集約している（クライアント管理スクリプトからも同じ
+# エンベロープで送るため）。ここが黙って失敗すると全アラートが止まるので、
+# 不在なら journal に残す。make doctor も install 状態を点検する。
 send_mail() {
-  local subject="$1" body="$2" from sm
-  if [ -z "$ALERT_EMAIL" ]; then
-    logg "ALERT_EMAIL 未設定のため送信スキップ: $subject"
+  local subject="$1" body="$2"
+  if [ ! -x "$NOTIFY" ]; then
+    logg "$NOTIFY が無いため送信できません（make sync-scripts で配置）: $subject"
     return 0
   fi
-  if [ "$SMTP_MODE" = "local" ]; then
-    sm="$(command -v sendmail 2>/dev/null || true)"
-    if [ -z "$sm" ] && [ -x /usr/sbin/sendmail ]; then sm=/usr/sbin/sendmail; fi
-    if [ -z "$sm" ]; then
-      logg "sendmail(dma) 不在のため送信スキップ: $subject"
-      return 0
-    fi
-    if {
-      printf 'To: %s\n' "$ALERT_EMAIL"
-      printf 'From: %s\n' "${MAIL_FROM:-$ALERT_EMAIL}"
-      printf 'Subject: [orenovpn] %s\n' "$subject"
-      printf 'Content-Type: text/plain; charset=UTF-8\n'
-      printf '\n'
-      printf '%s\n' "$body"
-    } | "$sm" -t; then
-      logg "通知送信(local/dma): $subject"
-    else
-      logg "通知送信失敗(local/dma): $subject"
-    fi
-    return 0
-  fi
-  if ! command -v msmtp >/dev/null 2>&1; then
-    logg "msmtp 不在のため送信スキップ: $subject"
-    return 0
-  fi
-  from="${SMTP_USER:-root@$HOST_LABEL}"
-  if {
-    printf 'To: %s\n' "$ALERT_EMAIL"
-    printf 'From: orenovpn <%s>\n' "$from"
-    printf 'Subject: [orenovpn] %s\n' "$subject"
-    printf 'Content-Type: text/plain; charset=UTF-8\n'
-    printf '\n'
-    printf '%s\n' "$body"
-    printf '\n-- \norenovpn watch @ %s (%s)\n' "$HOST_LABEL" "$(date '+%Y-%m-%d %H:%M:%S %Z')"
-  } | msmtp --file="$MSMTP_CONF" "$ALERT_EMAIL"; then
-    logg "通知送信: $subject"
-  else
-    logg "通知送信失敗（msmtp 設定を確認）: $subject"
-  fi
+  "$NOTIFY" send "$subject" "$body" || logg "通知の送信に失敗: $subject"
 }
 
 # ---- クールダウン付きアラート（$1=key $2=subject $3=body）------------------

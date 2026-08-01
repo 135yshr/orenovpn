@@ -29,7 +29,15 @@ VPN サーバーで「怪しい通信」を検知し、管理者へメールで�
 | 不審な出口通信 | ipset(`orenovpn_blocklist`) + `nat PREROUTING` の LOG で検知（ログのみ・ドロップしない）。**`-s <VPN サブネット>` で VPN 発に限定**し、リスト側も VPN サブネットを `nomatch` で除外する（公開リストは private 範囲を含むため、限定しないと戻り通信が全件一致して誤検知になる）| 中 |
 | トラフィック量の異常 | 転送バイトの前回比増分を閾値判定。WireGuard は `wg show transfer`、IKEv2 は `swanctl --list-sas` の CHILD_SA 転送量を合算（policy ベースの IPsec には `ipsec0` のようなインターフェイスが無いため）| ほぼゼロ |
 | **資格情報の複製** | 同一のピア公開鍵 / 証明書 ID が直近 1 時間に複数の接続元 IP から使われたら警告 | ほぼゼロ |
+| **クライアントの作成/削除** | `vpn-client add` / `remove` が実行された時点で即時通知（5 分周期ではない）。実行者・接続元 IP・鍵/証明書の識別子を載せる。削除側は IKEv2 の失効(CRL)に成功したかも含む | ほぼゼロ |
 
+> 「クライアントの作成/削除」は**サーバー上で鍵が発行された瞬間**を捉えます。接続の検知
+> （新規 VPN 接続・資格情報の複製）は「発行済みの鍵が使われた」後にしか鳴りませんが、
+> root を取られた場合、攻撃者はまず**自分用の正規の鍵を発行**して居座ります。その鍵で
+> 接続されても「正規のクライアント」にしか見えないため、接続側の検知では気付けません。
+> 作成イベントの通知がその穴を埋めます（`make client` を実行していないのに
+> 「VPN クライアントを作成」が届いたら、サーバーが侵害されています）。
+>
 > IKEv2 で「認証前の SA」を数えてはいけません。`swanctl --list-sas` は IKE_SA_INIT に
 > 応答しただけの半開き SA も `CONNECTING` として列挙し、相手の身元は `remote '%any'` の
 > ままです。UDP/500 を叩くだけのポートスキャナで作られるため、これを数えると
@@ -103,10 +111,11 @@ ALERT_SSH_LOGIN_IGNORE_IPS="203.0.113.5 198.51.100.9" # 特定の接続元だけ
 | `smtp_host` / `smtp_port` / `smtp_user` | `"" / 587 / ""` | msmtp の送信設定 |
 | `smtp_password` | `""`（sensitive） | SMTP 認証パスワード |
 | `smtp_mode` | `"relay"` | `"relay"`=外部 SMTP へ msmtp でリレー / `"local"`=VPN 上の `dma` が宛先 MX へ直接配送（外部 SMTP 不要・待受なし）|
-| `mail_from` | `""` | 差出人。空なら `alert_email` を使う。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）|
+| `mail_from` | `""` | 差出人（`relay` / `local` の両モードで有効。優先順位は `mail_from` → `smtp_user` → `alert_email`）。**`local` モードでは自分が管理するドメインのアドレスを必ず指定**（受信側アドレスを差出人にすると SPF 違反で拒否される）。`relay` モードで認証付きリレー（Gmail 等）を使う場合は、そのアカウントで送信が許可されたアドレスにすること（不一致だとリレーに拒否される）|
 | `alert_ssh_fail_threshold` | `20` | 1 周期あたり SSH 認証失敗の警告閾値 |
 | `enable_ssh_login_alert` | `true` | SSH ログイン**成功**の通知 |
 | `alert_ssh_login_ignore_ips` | `[]` | ログイン通知から除外する接続元 IP（完全一致） |
+| `enable_client_change_alert` | `true` | VPN クライアント（プロファイル）の**作成・削除**の通知 |
 | `alert_traffic_mbytes` | `1024` | 1 周期あたり転送量の警告閾値（MB） |
 | `alert_blocklist_url` | `""` | 悪性 IP ブロックリスト取得元（空＝出口検知 OFF） |
 

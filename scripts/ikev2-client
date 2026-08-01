@@ -25,6 +25,14 @@ ENABLE_CERT_REVOCATION="${ENABLE_CERT_REVOCATION:-true}"
 
 mkdir -p "$CLIENT_DIR"; umask 077
 die() { echo "エラー: $*" >&2; exit 1; }
+
+# クライアントの作成/削除をメール通知する（不在・失敗でも処理は続行する）。
+NOTIFY=/usr/local/sbin/orenovpn-notify
+notify_client() {
+  [ -x "$NOTIFY" ] || return 0
+  "$NOTIFY" client-change "$@" || true
+}
+
 [ "$(id -u)" -eq 0 ] || die "root 権限で実行してください（sudo）"
 [ -n "$SERVER_IP" ] || die "SERVER_IP を特定できません（setup.sh 実行後に再試行してください）"
 
@@ -141,6 +149,16 @@ cmd_add() {
 EOF
   chmod 600 "${CLIENT_DIR}/${name}.mobileconfig"
 
+  # 証明書のシリアルも載せる。失効(CRL)の突き合わせと、「新規 VPN 接続を検知
+  # （IKEv2）」が示す証明書 ID との対応を後から追えるようにするため。
+  local serial
+  serial="$(openssl x509 -in "${PKI}/${name}-cert.pem" -noout -serial 2>/dev/null \
+    | cut -d= -f2 || true)"
+  notify_client added "$name" "  証明書 ID: CN=${name}
+  証明書シリアル: ${serial:-（取得できず）}
+  構成プロファイル: ${CLIENT_DIR}/${name}.mobileconfig
+  ⚠️ .mobileconfig は p12 の復号パスワードを平文で含みます（＝資格情報そのもの）。"
+
   if [ "$quiet" != "--quiet" ]; then
     echo "クライアント '${name}' の構成プロファイルを作成しました。"
     echo
@@ -155,7 +173,12 @@ cmd_remove() {
 
   # 失効が有効で、かつこの証明書が CA DB(index.txt)に登録済みなら失効させる。
   # （openssl ca 方式で発行された証明書のみ失効可能。旧 x509 発行分は revoke 不可）
-  local revoked=0 reason="" out=""
+  local revoked=0 reason="" out="" serial=""
+  # 失効前に控える（成功時は原本を消すため、後からは取得できない）
+  if [ -f "${PKI}/${name}-cert.pem" ]; then
+    serial="$(openssl x509 -in "${PKI}/${name}-cert.pem" -noout -serial 2>/dev/null \
+      | cut -d= -f2 || true)"
+  fi
   if [ "${ENABLE_CERT_REVOCATION}" != "true" ] || [ ! -f "${PKI}/ca.cnf" ]; then
     reason="失効機能が無効（enable_cert_revocation=false で構築されている）"
   elif [ ! -f "${PKI}/${name}-cert.pem" ]; then
@@ -183,14 +206,26 @@ cmd_remove() {
   rm -f "${CLIENT_DIR}/${name}.mobileconfig" \
         "${PKI}/${name}-key.pem" "${PKI}/${name}.p12"
 
+  # 通知には「失効できたか」を必ず載せる。失効できていない場合は配布物を消しても
+  # 手元に残った証明書で最長 10 年つなげてしまい、削除＝遮断ではないため。
   if [ "$revoked" = 1 ]; then
     rm -f "${PKI}/${name}-cert.pem"
+    notify_client removed "$name" "  証明書 ID: CN=${name}
+  証明書シリアル: ${serial:-（取得できず）}
+  失効(CRL): 済み — 以後この証明書では新規接続できません。
+  ※ 確立中のセッションは残ります。即時に切るなら
+     sudo swanctl --terminate --ike orenovpn"
     echo "クライアント '${name}' を削除し、証明書を失効(CRL)しました。"
     echo "以後この証明書では新規接続できません（strongSwan が CRL で拒否）。"
     echo "⚠️ CRL は「新しい認証」時に効きます。確立中のセッションは残るため、確実に切るには:"
     echo "     sudo swanctl --list-sas                    # 現在の接続を確認"
     echo "     sudo swanctl --terminate --ike orenovpn    # 全接続を切断（正規端末は再接続が必要）"
   else
+    notify_client removed "$name" "  証明書 ID: CN=${name}
+  証明書シリアル: ${serial:-（取得できず）}
+  ⚠️ 失効(CRL): 失敗 — 配布物は消えましたが、この証明書はまだ接続に使えます。
+     理由: ${reason}
+  対処: make doctor で失効機能の状態を確認し、有効化したうえで make remove を再実行"
     echo "クライアント '${name}' の配布物・秘密鍵を削除しました（証明書の原本は保持）。"
     echo "⚠️ これは接続アクセスの「失効」ではありません。理由: ${reason}"
     echo "   発行済みクライアント証明書は手元に残っていれば最長10年、接続に使用できます。"
