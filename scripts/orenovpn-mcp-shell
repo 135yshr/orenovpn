@@ -33,6 +33,9 @@ LOGS=/usr/local/sbin/orenovpn-logs
 
 # 引数の上限。MCP 側（internal/usecase/port/allowlist.go）と同じ値にする。
 # 上限を置くのは journalctl が長時間走り続けるのを防ぐため。
+# ここは「MCP が送りうる値を通すか」だけを見る。実際に 1 応答で返すレコード数の上限は
+# orenovpn-logs の JSON_MAX に一本化してあり、超過分は truncated として申告される。
+# ここを JSON_MAX まで下げると、MCP が仕様どおり送った値が理由も返らず拒否される。
 MAX_HOURS=8760   # 24 * 365
 MAX_LIMIT=10000
 

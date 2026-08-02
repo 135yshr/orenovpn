@@ -290,12 +290,35 @@ fi
 AK="${HOME:-/home/$(id -un)}/.ssh/authorized_keys"
 if [ -r "$AK" ]; then
   # 「MCP 用の鍵」は鍵コメントか forced command に orenovpn-mcp を含む行で識別する
-  # （docs の手順が -C orenovpn-mcp を指定している）。
-  MCPKEYS="$(grep -c 'orenovpn-mcp' "$AK" 2>/dev/null || true)"
+  # （docs の手順が -C orenovpn-mcp を指定している）。コメント行は数えない。
+  #
+  # 判定は必ず「オプション欄の位置」で行う。authorized_keys のオプションは
+  # **鍵種別の前**にある場合だけ有効で、鍵コメントに書いた command=/restrict は
+  # sshd から見ればただの文字列＝制限なしの全権の鍵になる。行全体を grep すると
+  # 次の行を「正しく制限されている」と誤判定し、この検査が拾うべき退行そのものを
+  # 見逃す:
+  #   ssh-ed25519 AAAA... orenovpn-mcp command="/usr/local/sbin/orenovpn-mcp-shell",restrict
+  MCPAWK='
+    /^[[:space:]]*#/ { next }
+    !/orenovpn-mcp/  { next }
+    {
+      mcp++
+      opts = ""; found = 0
+      for (i = 1; i <= NF; i++) {
+        # 鍵種別（ssh-ed25519 / ssh-rsa / ecdsa-sha2-* / sk-*）が始まったらそこまでが
+        # オプション欄。これより後ろは鍵本体と鍵コメントで、オプションとしては効かない。
+        if ($i ~ /^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)$/) { found = 1; break }
+        opts = opts " " $i
+      }
+      if (!found) { bad++; next }                                        # 鍵種別が無い＝壊れた行
+      if (index(opts, "command=\"/usr/local/sbin/orenovpn-mcp-shell\"") == 0) { bad++; next }
+      if (opts !~ /(^|[, \t])restrict([, \t]|$)/) { bad++; next }
+    }'
+  MCPKEYS="$(awk "$MCPAWK"' END { print mcp + 0 }' "$AK" 2>/dev/null || echo 0)"
   if [ "${MCPKEYS:-0}" -gt 0 ]; then
-    BADKEYS="$(awk '/orenovpn-mcp/ && !(/command="\/usr\/local\/sbin\/orenovpn-mcp-shell"/ && /restrict/) {n++} END {print n + 0}' "$AK")"
+    BADKEYS="$(awk "$MCPAWK"' END { print bad + 0 }' "$AK")"
     if [ "${BADKEYS:-0}" -gt 0 ]; then
-      bad "MCP 用の鍵 ${BADKEYS} 件に command=/restrict が無い（サーバーの全権を渡した状態）→ authorized_keys の行頭を command=\"/usr/local/sbin/orenovpn-mcp-shell\",restrict にする"
+      bad "MCP 用の鍵 ${BADKEYS} 件に有効な command=/restrict が無い（サーバーの全権を渡した状態）→ authorized_keys の**行頭**を command=\"/usr/local/sbin/orenovpn-mcp-shell\",restrict にする（鍵種別より後ろに書いても効きません）"
     else
       pass "MCP 用の鍵 ${MCPKEYS} 件はすべて forced command(orenovpn-mcp-shell)+restrict 付き"
     fi

@@ -677,6 +677,11 @@ case "$MODE" in
       LIMIT="${2:-$JSON_MAX}"
       check_uint "$LIMIT" "件数"
       [ "$LIMIT" -ge 1 ] || die "件数は 1 以上で指定してください"
+      # 1 応答あたりの上限は JSON_MAX に一本化する。呼び出し側（MCP）は最大 10000 まで
+      # 要求できるが、access / dns が JSON_MAX で頭打ちなのに egress だけ倍返せると
+      # 「1 応答あたりの上限」が命令ごとに変わってしまう。切り詰めたことは
+      # json_events が truncated で申告するので、黙って減らすことにはならない。
+      [ "$LIMIT" -le "$JSON_MAX" ] || LIMIT="$JSON_MAX"
       collect_klog 'orenovpn-egress: ' | json_events "" "$LIMIT"
     else
       show_egress

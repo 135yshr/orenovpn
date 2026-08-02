@@ -208,8 +208,17 @@ make ssh                                        # サーバーへ入る
 sudo orenovpn-logs egress 24                    # 出口検知の宛先と接続元
 sudo orenovpn-logs blocklist 185.220.101.1      # その宛先がどの範囲で一致したか
 sudo orenovpn-logs clients                      # 接続元の VPN 内 IP からクライアント名を引く
-sudo orenovpn-logs access 10.66.66.2 24         # その端末の全宛先
-sudo orenovpn-logs dns 10.66.66.2 24            # その端末の DNS 問い合わせ（名前）
+sudo orenovpn-logs access 24                    # 全端末の宛先（接続元の列で見分ける）
+sudo orenovpn-logs dns 24                       # 全端末の DNS 問い合わせ（名前）
+```
+
+**接続元での絞り込みは `--json` を付けたときだけ**。人間向けの `access` / `dns` は
+第 1 引数を時間として扱うため、`orenovpn-logs access 10.66.66.2 24` は
+「時間は整数で指定してください」で終わる。端末を 1 台に絞るならこう:
+
+```bash
+sudo orenovpn-logs access --json 10.66.66.2 24 | jq .
+sudo orenovpn-logs dns    --json 10.66.66.2 24 | jq -r '.queries[] | "\(.at) \(.name)"'
 ```
 
 この一連の絞り込みを AI に任せるための口が
@@ -229,24 +238,37 @@ MCP が壊れても `make access-log` は今までどおり動く。
 ssh-keygen -t ed25519 -f ~/.ssh/orenovpn-mcp -C orenovpn-mcp -N ''
 chmod 600 ~/.ssh/orenovpn-mcp
 
-# 2) ディスパッチャがサーバーに入っていることを確認（make setup / sync-scripts で配置される）
-make ssh
-ls -l /usr/local/sbin/orenovpn-mcp-shell
+# 2) 接続先を控える（以降の手順で使う）
+HOST="$(terraform -chdir=terraform output -raw server_ip)"
+USER="$(terraform -chdir=terraform output -raw admin_user)"
 
-# 3) 公開鍵を authorized_keys へ「必ず command= と restrict 付きで」追記する
-#    （手元で実行。1 行で入れる。行頭のオプションを付け忘れると全権の鍵になる）
-KEY="$(cat ~/.ssh/orenovpn-mcp.pub)"
-make ssh
-echo "command=\"/usr/local/sbin/orenovpn-mcp-shell\",restrict ${KEY}" \
-  | sudo tee -a ~/.ssh/authorized_keys
-exit
+# 3) ディスパッチャがサーバーに入っていることを確認（make setup / sync-scripts で配置される）
+ssh "${USER}@${HOST}" 'ls -l /usr/local/sbin/orenovpn-mcp-shell'
 
-# 4) ホスト鍵の指紋を控える（MCP 側は StrictHostKeyChecking=no を持たない）
-ssh-keyscan -t ed25519 "$(terraform -chdir=terraform output -raw server_ip)" \
-  | ssh-keygen -lf - 
+# 4) 公開鍵を authorized_keys へ「必ず command= と restrict 付きで」追記する
+#    すべて手元で実行し、鍵の中身は標準入力で渡す（サーバー側のシェルで変数を
+#    展開させない。ログインしてから echo "... ${KEY}" と打つと KEY はサーバー側で
+#    未定義になり、鍵本体の入っていない不正な行が追記される）。
+{ printf 'command="/usr/local/sbin/orenovpn-mcp-shell",restrict '
+  cat ~/.ssh/orenovpn-mcp.pub
+} | ssh "${USER}@${HOST}" 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
 
-# 5) 点検（command=/restrict の付け忘れとディスパッチャの配置を検査する）
+# 5) 追記された行を目視で確認する（オプションが行頭にあること）
+ssh "${USER}@${HOST}" 'tail -1 ~/.ssh/authorized_keys'
+
+# 6) ホスト鍵の指紋を控える（MCP 側は StrictHostKeyChecking=no を持たない）
+ssh-keyscan -t ed25519 "$HOST" | ssh-keygen -lf -
+
+# 7) 点検（command=/restrict の付け忘れとディスパッチャの配置を検査する）
 make doctor
+```
+
+**オプションは必ず鍵種別（`ssh-ed25519`）より前に書く。** 後ろに書いたものは
+sshd から見ればただの鍵コメントで、制限は一切かからない（＝全権の鍵になる）。
+正しい行はこの形:
+
+```
+command="/usr/local/sbin/orenovpn-mcp-shell",restrict ssh-ed25519 AAAA... orenovpn-mcp
 ```
 
 鍵コメントの `orenovpn-mcp` は `make doctor` が「MCP 用の鍵」を識別する目印なので消さない。
