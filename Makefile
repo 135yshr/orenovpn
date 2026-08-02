@@ -33,6 +33,9 @@ export NAME
 # 定義した場合もレシピのシェルへ届くようにする）。
 export HOURS
 
+# PUBKEY（make mcp-key で登録する公開鍵のパス）も同じ方式で渡す。
+export PUBKEY
+
 # NAME を英数字・ハイフン・アンダースコアのみに制限（空も拒否）。各ターゲット冒頭で呼ぶ。
 NAMECHECK = printf '%s' "$$NAME" | grep -qE '^[A-Za-z0-9_-]+$$' || { echo "NAME を英数字・ハイフン・アンダースコアで指定してください（例: NAME=my-phone）"; exit 1; }
 
@@ -45,7 +48,7 @@ SCRIPT_FILES = scripts/setup.sh scripts/wg-client scripts/ikev2-client scripts/v
 INSTALL_SCRIPTS = sudo install -m 0755 /tmp/wg-client /usr/local/sbin/wg-client && sudo install -m 0755 /tmp/ikev2-client /usr/local/sbin/ikev2-client && sudo install -m 0755 /tmp/vpn-client /usr/local/sbin/vpn-client && sudo install -m 0755 /tmp/watch.sh /usr/local/sbin/orenovpn-watch && sudo install -m 0755 /tmp/orenovpn-notify /usr/local/sbin/orenovpn-notify && sudo install -m 0755 /tmp/orenovpn-logs /usr/local/sbin/orenovpn-logs && sudo install -m 0755 /tmp/orenovpn-mcp-shell /usr/local/sbin/orenovpn-mcp-shell && sudo install -m 0700 /tmp/setup.sh /usr/local/sbin/setup.sh
 CLEAN_SCRIPTS = rm -f /tmp/setup.sh /tmp/wg-client /tmp/ikev2-client /tmp/vpn-client /tmp/watch.sh /tmp/orenovpn-notify /tmp/orenovpn-logs /tmp/orenovpn-mcp-shell
 
-.PHONY: help preset init plan deploy apply status setup sync-scripts ssh doctor alerts-test alerts-status configure-alerts configure-logging access-log dns-log logs-status client clients show profile serve-profile remove destroy fmt validate check images volume-types
+.PHONY: help preset init plan deploy apply status setup sync-scripts ssh doctor alerts-test alerts-status configure-alerts configure-logging access-log dns-log logs-status mcp-key client clients show profile serve-profile remove destroy fmt validate check images volume-types
 
 # HOURS（記録の参照範囲）を整数に検証し、未指定なら 6 にする。各レシピの先頭で呼ぶ。
 HOURSCHECK = HOURS="$${HOURS:-6}"; printf '%s' "$$HOURS" | grep -qE '^[0-9]+$$' || { echo "HOURS は整数で指定してください（例: HOURS=6）"; exit 1; }
@@ -133,6 +136,34 @@ dns-log: ## 記録したDNS問い合わせ(ドメイン名)を表示・集計  �
 
 logs-status: ## 記録機能の有効/無効・適用ルール・待受を表示
 	@$(SSH) 'sudo orenovpn-logs status'
+
+mcp-key: ## MCP用の公開鍵を forced command 付きで登録  例: make mcp-key PUBKEY=~/.ssh/orenovpn-mcp.pub
+# 手順書に素の ssh を書くと admin 鍵（SSH_KEY / orenovpn.local.mk）が渡らず
+# "Permission denied (publickey)" になる。Makefile の $(SSH) を使えば接続情報が
+# 一箇所に揃うため、このターゲットを入口にする。
+# 鍵本体はサーバー側のシェルへ展開させず標準入力で渡す（ログイン後に
+# echo "... $$KEY" と打つと KEY はサーバー側で未定義になり、鍵の入らない
+# 不正な行が追記される）。
+	@PUB="$${PUBKEY:-$$HOME/.ssh/orenovpn-mcp.pub}"; \
+	if [ ! -f "$$PUB" ]; then \
+	  echo "公開鍵が見つかりません: $$PUB"; \
+	  echo "→ ssh-keygen -t ed25519 -f ~/.ssh/orenovpn-mcp -C orenovpn-mcp -N '' で作成してください"; \
+	  exit 1; \
+	fi; \
+	BODY="$$(awk 'NR == 1 {print $$2}' "$$PUB")"; \
+	case "$$BODY" in \
+	  ''|*[!A-Za-z0-9+/=]*) echo "公開鍵の形式が不正です: $$PUB"; exit 1 ;; \
+	esac; \
+	if $(SSH) "grep -qF '$$BODY' ~/.ssh/authorized_keys 2>/dev/null"; then \
+	  echo "既に登録済みです（重複して追記しません）。"; \
+	else \
+	  { printf 'command="/usr/local/sbin/orenovpn-mcp-shell",restrict '; cat "$$PUB"; } \
+	    | $(SSH) 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'; \
+	  echo "登録しました。"; \
+	fi; \
+	echo "--- authorized_keys の該当行（オプションが鍵種別より前にあること）---"; \
+	$(SSH) "grep -F '$$BODY' ~/.ssh/authorized_keys"; \
+	echo "→ 確認: make doctor / ssh -i $${PUB%.pub} $(SSH_USER)@$(SSH_HOST) clients"
 
 client: ## クライアントを追加   例: make client NAME=my-phone
 	@$(NAMECHECK)
