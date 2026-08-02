@@ -44,7 +44,8 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 - `list-images.sh` / `list-volume-types.sh`: ConoHa の有効な名前を照会するヘルパ。
 - `doctor.sh`: リモートで実行される診断。構成の退行検出もここに集約する（新しい不変条件を作ったら必ず検査を足す）。
 - `watch.sh`: 通信監視・警告の本体。`/usr/local/sbin/orenovpn-watch` として install され systemd timer が 5 分毎に実行。
-- `orenovpn-logs`: 記録したアクセス先（宛先IP / DNS）の表示・集計。`make access-log` / `dns-log` / `logs-status` の実体。
+- `orenovpn-logs`: 記録したアクセス先（宛先IP / DNS）の表示・集計。`make access-log` / `dns-log` / `logs-status` の実体。`--json` を付けると機械可読な出力になる（orenovpn-mcp 用。人間向けの整形出力は絶対に変えない）。
+- `orenovpn-mcp-shell`: orenovpn-mcp（読み取り専用 MCP サーバー）用の forced command ディスパッチャ。`$SSH_ORIGINAL_COMMAND` を許可リスト 6 コマンドと突き合わせて `orenovpn-logs --json` に振り分ける。
 - `configure-alerts.sh` / `configure-logging.sh`: 既存サーバーの `orenovpn.env` を SSH で更新して設定を反映する（cloud-init は初回のみ動くため、tfvars の変更は既存 VPS に届かない）。
 
 ### Terraform ファイル構成（`terraform/`）
@@ -63,6 +64,7 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 - **IKEv2 の証明書失効(CRL)は既定 ON**（`enable_cert_revocation = true`）。OFF にすると `make remove` が「ファイル削除だけ」になり、漏洩した証明書を 10 年間止められない。`ikev2-client remove` は失効できなかった場合に証明書の原本を**残す**（消すと将来も失効できなくなる）。
 - **`make setup` は VPN を切断した状態で実行する**。途中で strongSwan / wg-quick を再起動するため、VPN 経由の SSH（フルトンネルなのでサーバーへの SSH もトンネル内を通る）だと接続ごと切れて構成が中断する。setup.sh は `SSH_CONNECTION` の接続元が VPN サブネット内なら実行を拒否する（`ORENOVPN_ALLOW_VPN_SETUP=1` で上書き可）。
 - **SSH は 22 番固定**（Debian の SSH ソケットアクティベーションでポート変更が反映されず接続不能になり得るため機能として持たない）。防御は鍵認証＋fail2ban＋`allowed_ssh_cidr`。
+- **`orenovpn-mcp-shell` が MCP 連携の唯一のセキュリティ境界**（セキュリティ不変条件）。admin の NOPASSWD sudo は生きているため、ここを抜かれると全部抜ける。`$SSH_ORIGINAL_COMMAND` を**シェルに渡さない**（`eval` / `sh -c` を使わない）。`read -ra` で配列へ分解し `case` で完全一致判定してから、スクリプト内に固定で書いた引数配列で `sudo` を exec する。引数は型（整数・IP アドレス書式）で検証し、許可されないものは**エラー内容を返さず終了コードのみ**。許可リストは読み取り 6 コマンドのみで、書き込み系（削除・失効・設定変更）を足さない。`authorized_keys` 側の `command=` と `restrict` を付け忘れると全権の鍵になるため、`make doctor` がこれを検査する。
 - **`NAME` 引数のインジェクション対策**: Makefile は `NAME` をレシピ文字列に展開せず `export NAME` で環境変数として渡し、`NAMECHECK`（英数・ハイフン・アンダースコアのみ）で検証してから `$$NAME` を参照する。クライアント名を扱う新ターゲットでも必ず `@$(NAMECHECK)` を冒頭に置き、同じ方式を守る。
 - OS は cloud-init + apt 前提のため **Debian / Ubuntu 系のみ**（RHEL 系不可）。512MB プランでは `setup.sh` が apt のメモリ不足を防ぐため swap を確保する。
 

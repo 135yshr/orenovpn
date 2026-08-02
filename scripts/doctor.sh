@@ -202,8 +202,14 @@ if [ "$ALERT" = "true" ]; then
     else
       wrn "VPN サブネットが除外されていない（private 範囲を含むリストでは誤検知の原因）→ sudo /usr/local/sbin/orenovpn-egress-refresh"
     fi
+    # 登録数。VPN サブネットの除外(nomatch)しか無い＝実質空で、この状態だと
+    # 出口検知も MCP の check_blocklist も常に「一致なし」を返し続ける。
     n="$($S ipset list orenovpn_blocklist 2>/dev/null | grep -c '^[0-9]')"
-    echo "[INFO] ブロックリスト登録数: ${n:-0}"
+    if [ "${n:-0}" -le 1 ]; then
+      wrn "ブロックリストが空（登録数 ${n:-0}）。出口検知は常に 0 件になります → sudo /usr/local/sbin/orenovpn-egress-refresh で取得を確認"
+    else
+      pass "ブロックリスト登録数: ${n}"
+    fi
   fi
   last="$($S systemctl show -p ExecMainStatus --value orenovpn-watch.service 2>/dev/null || echo '')"
   if [ -n "$last" ]; then echo "[INFO] 監視の直近実行ステータス: ${last}"; fi
@@ -275,6 +281,54 @@ if [ "$DNSLOG" = "true" ]; then
     pass "DNS 強制転送(DNAT) 設定あり"
   else
     wrn "DNS の DNAT が無い（端末が別のリゾルバを使うと名前が記録されない）"
+  fi
+fi
+
+# 7. MCP からの読み取り（orenovpn-mcp）
+#    forced command の付け忘れが一番危ない退行。admin の NOPASSWD sudo は生きているため、
+#    command= と restrict が無い鍵はサーバーの全権を渡したのと同じになる。
+AK="${HOME:-/home/$(id -un)}/.ssh/authorized_keys"
+if [ -r "$AK" ]; then
+  # 「MCP 用の鍵」は鍵コメントか forced command に orenovpn-mcp を含む行で識別する
+  # （docs の手順が -C orenovpn-mcp を指定している）。コメント行は数えない。
+  #
+  # 判定は必ず「オプション欄の位置」で行う。authorized_keys のオプションは
+  # **鍵種別の前**にある場合だけ有効で、鍵コメントに書いた command=/restrict は
+  # sshd から見ればただの文字列＝制限なしの全権の鍵になる。行全体を grep すると
+  # 次の行を「正しく制限されている」と誤判定し、この検査が拾うべき退行そのものを
+  # 見逃す:
+  #   ssh-ed25519 AAAA... orenovpn-mcp command="/usr/local/sbin/orenovpn-mcp-shell",restrict
+  MCPAWK='
+    /^[[:space:]]*#/ { next }
+    !/orenovpn-mcp/  { next }
+    {
+      mcp++
+      opts = ""; found = 0
+      for (i = 1; i <= NF; i++) {
+        # 鍵種別（ssh-ed25519 / ssh-rsa / ecdsa-sha2-* / sk-*）が始まったらそこまでが
+        # オプション欄。これより後ろは鍵本体と鍵コメントで、オプションとしては効かない。
+        if ($i ~ /^(ssh-[a-z0-9]+|ecdsa-sha2-[a-z0-9-]+|sk-[a-z0-9@.-]+)$/) { found = 1; break }
+        opts = opts " " $i
+      }
+      if (!found) { bad++; next }                                        # 鍵種別が無い＝壊れた行
+      if (index(opts, "command=\"/usr/local/sbin/orenovpn-mcp-shell\"") == 0) { bad++; next }
+      if (opts !~ /(^|[, \t])restrict([, \t]|$)/) { bad++; next }
+    }'
+  MCPKEYS="$(awk "$MCPAWK"' END { print mcp + 0 }' "$AK" 2>/dev/null || echo 0)"
+  if [ "${MCPKEYS:-0}" -gt 0 ]; then
+    BADKEYS="$(awk "$MCPAWK"' END { print bad + 0 }' "$AK")"
+    if [ "${BADKEYS:-0}" -gt 0 ]; then
+      bad "MCP 用の鍵 ${BADKEYS} 件に有効な command=/restrict が無い（サーバーの全権を渡した状態）→ authorized_keys の**行頭**を command=\"/usr/local/sbin/orenovpn-mcp-shell\",restrict にする（鍵種別より後ろに書いても効きません）"
+    else
+      pass "MCP 用の鍵 ${MCPKEYS} 件はすべて forced command(orenovpn-mcp-shell)+restrict 付き"
+    fi
+    if $S test -x /usr/local/sbin/orenovpn-mcp-shell; then
+      pass "MCP ディスパッチャ(orenovpn-mcp-shell) 配置あり"
+    else
+      bad "/usr/local/sbin/orenovpn-mcp-shell が無い/実行不可（MCP は何も読めません）→ make sync-scripts"
+    fi
+  elif $S test -x /usr/local/sbin/orenovpn-mcp-shell; then
+    echo "[INFO] MCP ディスパッチャは配置済み（authorized_keys に MCP 用の鍵は未登録）"
   fi
 fi
 

@@ -4,9 +4,21 @@
 #
 #   orenovpn-logs access [時間]   宛先 IP/ポートの記録（nat PREROUTING の LOG → カーネルログ）
 #   orenovpn-logs dns    [時間]   DNS 問い合わせの記録（unbound の query log）
+#   orenovpn-logs egress [時間]   出口検知の記録（既知悪性 IP への通信 = orenovpn-egress:）
+#   orenovpn-logs clients         登録済みクライアントの一覧
+#   orenovpn-logs blocklist <IP>  ブロックリストとの照合
 #   orenovpn-logs status          記録機能の有効/無効と保存設定を表示
 #
 #   時間は「何時間前まで」を整数で指定（既定 6）。サーバー上で root で実行する。
+#
+#   --json を付けると機械可読な JSON を出す（orenovpn-mcp から読むための出力）。
+#   人間向けの整形出力は --json の有無で一切変えない（既存の使い方を壊さないため）。
+#   JSON 時の引数は接続元での絞り込みが要るものだけ形が変わる:
+#
+#     orenovpn-logs access --json <接続元IP> <時間>
+#     orenovpn-logs dns    --json <接続元IP> <時間>   # 0.0.0.0 は「全接続元」の約束の値
+#     orenovpn-logs egress --json <時間> <件数>
+#     orenovpn-logs clients --json / blocklist --json <IP> / status --json
 #
 #   記録できるもの / できないもの:
 #     ○ 宛先 IP・ポート・接続元の VPN 内 IP・時刻
@@ -22,22 +34,215 @@ ENV_FILE=/etc/orenovpn/orenovpn.env
 : "${ENABLE_ACCESS_LOG:=false}"
 : "${ENABLE_DNS_LOGGING:=false}"
 : "${LOG_RETENTION_DAYS:=14}"
+: "${ALERT_BLOCKLIST_URL:=}"
+: "${VPN_PROTOCOL:=wireguard}"
 
-MODE="${1:-access}"
-HOURS="${2:-6}"
+# 引数の解析。`--json` はサブコマンドの前後どちらに来てもよい。
+#   人間向けの呼び方（orenovpn-logs access 6）は従来どおり位置引数で受ける。
+JSON=false
+MODE=""
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --json) JSON=true ;;
+    *)
+      if [ -z "$MODE" ]; then MODE="$a"; else ARGS+=("$a"); fi
+      ;;
+  esac
+done
+MODE="${MODE:-access}"
+set -- ${ARGS[@]+"${ARGS[@]}"}
+
 TOP=20
 LINES=60
+# --json 1 応答あたりのレコード上限。超えたら新しい方を残し truncated を立てる
+# （黙って切ると「その期間はこれで全部」と読まれてしまうため必ず申告する）。
+JSON_MAX=5000
+BLOCKLIST_SET=orenovpn_blocklist
+BLOCKLIST_PERSIST=/etc/orenovpn/blocklist.ipset
+WG_CONF=/etc/wireguard/wg0.conf
+CLIENT_DIR=/etc/orenovpn/clients
 
 die() { echo "エラー: $*" >&2; exit 1; }
 [ "$(id -u)" -eq 0 ] || die "root 権限で実行してください（sudo orenovpn-logs ...）"
-case "$HOURS" in ''|*[!0-9]*) die "時間は整数で指定してください（例: orenovpn-logs access 6）" ;; esac
-SINCE="${HOURS} hours ago"
+
+# 整数の検証（Makefile の HOURSCHECK と同じ流儀）。
+check_uint() {
+  case "$1" in
+    ''|*[!0-9]*) die "${2}は整数で指定してください（例: orenovpn-logs access 6）" ;;
+  esac
+}
+
+# IP アドレスの検証。「危険な文字を落とす」のではなく「アドレスとして読めるものだけ
+# 通す」形にする（除去方式は必ず抜け道が残る）。ゾーン付き(%eth0)は通さない。
+is_ipv4() {
+  local a="$1" o parts
+  local IFS=.
+  read -ra parts <<<"$a"
+  [ "${#parts[@]}" -eq 4 ] || return 1
+  for o in "${parts[@]}"; do
+    case "$o" in ''|*[!0-9]*) return 1 ;; esac
+    [ "${#o}" -le 3 ] || return 1
+    [ "$o" -le 255 ] || return 1
+  done
+  return 0
+}
+
+is_ipv6() {
+  local a="$1" g n=0 parts
+  # "::" は 1 回まで（":::"、2 個目の "::" を弾く）
+  case "$a" in *:::*) return 1 ;; esac
+  case "${a#*::}" in *::*) return 1 ;; esac
+  # 単独の先頭/末尾コロンは不正（"::" の一部なら可）
+  case "$a" in :*) case "$a" in ::*) ;; *) return 1 ;; esac ;; esac
+  case "$a" in *:) case "$a" in *::) ;; *) return 1 ;; esac ;; esac
+  local IFS=:
+  read -ra parts <<<"$a"
+  for g in "${parts[@]}"; do
+    [ -n "$g" ] || continue
+    if [ "${g#*.}" != "$g" ]; then
+      # 末尾の IPv4 記法（::ffff:1.2.3.4）は 2 グループ分として数える
+      is_ipv4 "$g" || return 1
+      n=$((n + 2))
+      continue
+    fi
+    [ "${#g}" -le 4 ] || return 1
+    n=$((n + 1))
+  done
+  [ "$n" -ge 1 ] && [ "$n" -le 8 ] || return 1
+  # "::" が無いならちょうど 8 グループ
+  case "$a" in *::*) ;; *) [ "$n" -eq 8 ] || return 1 ;; esac
+  return 0
+}
+
+is_ip() {
+  case "$1" in
+    ''|*[!0-9A-Fa-f.:]*) return 1 ;;
+    *:*) is_ipv6 "$1" ;;
+    *)   is_ipv4 "$1" ;;
+  esac
+}
+
+check_ip() { is_ip "$1" || die "${2}は IP アドレスで指定してください（例: 10.66.66.2）"; }
+
+# bash 側の JSON 文字列エスケープ（awk を通さない値に使う）。
+jstr() {
+  local s="$1"
+  s="${s//\\/\\\\}"
+  s="${s//\"/\\\"}"
+  printf '%s' "$s" | tr -d '[:cntrl:]'
+}
+
+jbool() { if [ "$1" = "true" ]; then printf 'true'; else printf 'false'; fi; }
+
+# エポック秒を RFC 3339 にする。
+rfc3339_epoch() { date -d "@$1" +%Y-%m-%dT%H:%M:%S%:z 2>/dev/null || true; }
 
 hint_enable() {
   echo "  有効化: make configure-logging ACCESS_LOG=on DNS_LOG=on"
   echo "         （tfvars では enable_access_log / enable_dns_logging）"
 }
 
+# =============================================================================
+# awk の共通関数
+#   - IPv6 は RFC 5952 の正規形（2001:db8::1）で出す。カーネルログの表記は各グループ
+#     4 桁 0 埋めの冗長形で、そのままでは受け手が突き合わせできない。
+#   - 突き合わせ（接続元での絞り込み）は展開形（8 グループ）に揃えてから比較する。
+#     表記が違うだけの同一アドレスを取りこぼさないため。
+#   - JSON エスケープは gsub の置換文字列規則（\\ の解釈）を避けて 1 文字ずつ組む。
+#     ここが壊れると受け手が JSON 全体を捨てるため、曖昧さを残さない。
+# =============================================================================
+AWK_LIB='
+function nz(s) { sub(/^0+/, "", s); return (s == "") ? "0" : s }
+function v6expand(a,   head, tail, hp, tp, hn, tn, i, out, miss, dc) {
+  a = tolower(a)
+  if (a !~ /:/) return a
+  dc = index(a, "::")
+  if (dc > 0) {
+    head = substr(a, 1, dc - 1)
+    tail = substr(a, dc + 2)
+    if (index(tail, "::") > 0) return a
+    hn = (head == "") ? 0 : split(head, hp, ":")
+    tn = (tail == "") ? 0 : split(tail, tp, ":")
+    miss = 8 - hn - tn
+    if (miss < 1) return a
+    out = ""
+    for (i = 1; i <= hn; i++) out = out ":" nz(hp[i])
+    for (i = 1; i <= miss; i++) out = out ":0"
+    for (i = 1; i <= tn; i++) out = out ":" nz(tp[i])
+    return substr(out, 2)
+  }
+  hn = split(a, hp, ":")
+  if (hn != 8) return a
+  out = ""
+  for (i = 1; i <= hn; i++) out = out ":" nz(hp[i])
+  return substr(out, 2)
+}
+function rfc5952(a,   e, p, n, i, bs, bl, cs, cl, out) {
+  if (a !~ /:/) return a
+  e = v6expand(a)
+  n = split(e, p, ":")
+  if (n != 8) return e
+  bs = 0; bl = 0; cs = 0; cl = 0
+  for (i = 1; i <= n; i++) {
+    if (p[i] == "0") {
+      if (cl == 0) cs = i
+      cl++
+      if (cl > bl) { bl = cl; bs = cs }
+    } else {
+      cl = 0
+    }
+  }
+  out = ""
+  if (bl < 2) {
+    for (i = 1; i <= n; i++) out = out (i == 1 ? "" : ":") p[i]
+    return out
+  }
+  for (i = 1; i < bs; i++) out = out (i == 1 ? "" : ":") p[i]
+  out = out "::"
+  for (i = bs + bl; i <= n; i++) out = out p[i] (i < n ? ":" : "")
+  return out
+}
+function rfc5952p(a,   s) {
+  s = index(a, "/")
+  if (s == 0) return rfc5952(a)
+  return rfc5952(substr(a, 1, s - 1)) substr(a, s)
+}
+function jesc(s,   i, c, out) {
+  out = ""
+  for (i = 1; i <= length(s); i++) {
+    c = substr(s, i, 1)
+    if (c == "\\") out = out "\\\\"
+    else if (c == "\"") out = out "\\\""
+    else if (c ~ /[[:cntrl:]]/) continue
+    else out = out c
+  }
+  return out
+}
+function rfc3339(t) {
+  if (t ~ /[+-][0-9][0-9][0-9][0-9]$/)
+    return substr(t, 1, length(t) - 2) ":" substr(t, length(t) - 1)
+  return t
+}
+'
+
+# カーネルログ（LOG ターゲット）の 1 行を分解する共通処理。
+AWK_KLOG='
+function parse(   i) {
+  ksrc = ""; kdst = ""; kproto = ""; kspt = ""; kdpt = ""
+  for (i = 1; i <= NF; i++) {
+    if ($i ~ /^SRC=/)        ksrc  = substr($i, 5)
+    else if ($i ~ /^DST=/)   kdst  = substr($i, 5)
+    else if ($i ~ /^PROTO=/) kproto = substr($i, 7)
+    else if ($i ~ /^SPT=/)   kspt  = substr($i, 5)
+    else if ($i ~ /^DPT=/)   kdpt  = substr($i, 5)
+  }
+}
+'
+
+# =============================================================================
+# 記録機能の状態
+# =============================================================================
 show_status() {
   echo "== 記録機能の状態 =="
   echo "  宛先IP の記録 (ENABLE_ACCESS_LOG) : ${ENABLE_ACCESS_LOG}"
@@ -55,6 +260,67 @@ show_status() {
     # `ss -uln` は Netid 列が無く列位置が変わるため、行全体を正規表現で判定する
     ss -ulnp 2>/dev/null | awk 'NR > 1 && /:53( |$)/' | grep . || echo "（待受なし）"
   fi
+}
+
+# 適用中の記録ルール（v4/v6）。JSON の rules と人間向けの両方で使う。
+status_rules() {
+  iptables -t nat -S PREROUTING 2>/dev/null \
+    | grep -E 'orenovpn-dst|orenovpn-egress|--dport 53' || true
+  if [ "${WG_ENABLE_IPV6:-false}" = "true" ]; then
+    ip6tables -t nat -S PREROUTING 2>/dev/null \
+      | grep -E 'orenovpn-dst|orenovpn-egress|--dport 53' || true
+  fi
+}
+
+json_status() {
+  local retention="$LOG_RETENTION_DAYS" timer=false blocklist=false
+  case "$retention" in ''|*[!0-9]*) retention=0 ;; esac
+  systemctl is-active --quiet orenovpn-watch.timer 2>/dev/null && timer=true
+  [ -n "$ALERT_BLOCKLIST_URL" ] && blocklist=true
+  printf '{"access_log_enabled":%s,"dns_log_enabled":%s,"blocklist_configured":%s,' \
+    "$(jbool "$ENABLE_ACCESS_LOG")" "$(jbool "$ENABLE_DNS_LOGGING")" "$(jbool "$blocklist")"
+  printf '"retention_days":%d,"watch_timer_active":%s,"rules":[' \
+    "$retention" "$(jbool "$timer")"
+  status_rules | awk "$AWK_LIB"'
+    { printf "%s\"%s\"", (n++ ? "," : ""), jesc($0) }'
+  printf ']}\n'
+}
+
+# =============================================================================
+# 宛先 IP の記録（access）と出口検知（egress）
+#   どちらもカーネルログの LOG 行で、prefix だけが違う。
+# =============================================================================
+collect_klog() { # $1 = ログ prefix（orenovpn-dst: / orenovpn-egress: ）
+  journalctl -k --no-pager -o short-iso --since "$SINCE" 2>/dev/null \
+    | grep -F "$1" || true
+}
+
+# 接続元での絞り込み（IPv6 は展開形で比較する）。want が空 or 0.0.0.0 なら全件。
+filter_src() { # $1 = want
+  if [ -z "$1" ] || [ "$1" = "0.0.0.0" ]; then cat; return 0; fi
+  awk -v want="$1" "$AWK_LIB$AWK_KLOG"'
+    BEGIN { want = v6expand(tolower(want)) }
+    { parse(); if (ksrc != "" && v6expand(tolower(ksrc)) == want) print }'
+}
+
+json_events() { # $1 = 絞り込む接続元（空可） $2 = 件数上限
+  local want="$1" cap="$2" tmp trunc=0 total
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  filter_src "$want" >"$tmp"
+  total="$(wc -l <"$tmp")"
+  if [ "$total" -gt "$cap" ]; then trunc=1; fi
+  tail -n "$cap" "$tmp" | awk -v trunc="$trunc" "$AWK_LIB$AWK_KLOG"'
+    BEGIN { printf "{\"events\":[" }
+    {
+      parse()
+      if (ksrc == "" || kdst == "") next
+      printf "%s{\"at\":\"%s\",\"src\":\"%s\",\"dst\":\"%s\",\"proto\":\"%s\"", \
+        (n++ ? "," : ""), rfc3339($1), rfc5952(ksrc), rfc5952(kdst), jesc(kproto)
+      if (kspt ~ /^[0-9]+$/) printf ",\"spt\":%d", kspt
+      if (kdpt ~ /^[0-9]+$/) printf ",\"dpt\":%d", kdpt
+      printf "}"
+    }
+    END { printf "]%s}\n", (trunc + 0 ? ",\"truncated\":true" : "") }'
 }
 
 show_access() {
@@ -115,6 +381,69 @@ show_access() {
   echo "全件: journalctl -k --since '${SINCE}' | grep orenovpn-dst"
 }
 
+show_egress() {
+  local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  collect_klog 'orenovpn-egress: ' >"$tmp"
+  if [ ! -s "$tmp" ]; then
+    echo "直近 ${HOURS} 時間の出口検知はありません。"
+    if [ -z "$ALERT_BLOCKLIST_URL" ]; then
+      echo "（ALERT_BLOCKLIST_URL が未設定のため出口検知は常に 0 件です）"
+      echo "  有効化: make configure-alerts（tfvars では alert_blocklist_url）"
+    fi
+    return 0
+  fi
+  echo "== 既知悪性 IP への通信（最新 ${LINES} 件 / 過去 ${HOURS} 時間）=="
+  printf '%-25s %-18s %-18s %s\n' '時刻' '接続元(VPN内)' '宛先' 'プロトコル:ポート'
+  tail -n "$LINES" "$tmp" | awk "$AWK_LIB$AWK_KLOG"'
+    {
+      parse()
+      printf "%-25s %-18s %-18s %s\n", $1, rfc5952(ksrc), rfc5952(kdst), \
+        kproto (kdpt == "" ? "" : ":" kdpt)
+    }'
+  echo
+  echo "== 宛先ごとの件数（上位 ${TOP} / 過去 ${HOURS} 時間）=="
+  awk "$AWK_LIB$AWK_KLOG"'
+    { parse(); if (kdst == "") next; c[rfc5952(kdst)]++ }
+    END { for (k in c) printf "%6d  %s\n", c[k], k }' "$tmp" | sort -rn | head -n "$TOP"
+  echo
+  echo "詳細: sudo orenovpn-logs blocklist <宛先IP>"
+}
+
+# =============================================================================
+# DNS 問い合わせ
+# =============================================================================
+# クライアントの問い合わせ（log-queries の出力）は
+#   "... info: <接続元IP> <名前>. <型> <クラス>"
+# の形。unbound 自身が出す "info: sending query: _ta-xxxx. NULL IN"（DNSSEC の
+# トラストアンカー通知）等も末尾が IN で並びが同じため、接続元の位置が
+# IP アドレスの字面（16進・ドット・コロンのみ）であることを条件に加えて除外する。
+collect_dns() {
+  journalctl -u unbound --no-pager -o short-iso --since "$SINCE" 2>/dev/null \
+    | awk '$NF == "IN" && NF >= 5 && $(NF-3) ~ /^[0-9a-fA-F.:]+$/ \
+           {printf "%s %s %s %s\n", $1, $(NF-3), $(NF-2), $(NF-1)}' || true
+}
+
+json_dns() { # $1 = 絞り込む接続元（空 or 0.0.0.0 で全件） $2 = 件数上限
+  local want="$1" cap="$2" tmp trunc=0 total
+  tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+  if [ -z "$want" ] || [ "$want" = "0.0.0.0" ]; then
+    collect_dns >"$tmp"
+  else
+    collect_dns | awk -v want="$want" "$AWK_LIB"'
+      BEGIN { want = v6expand(tolower(want)) }
+      v6expand(tolower($2)) == want' >"$tmp"
+  fi
+  total="$(wc -l <"$tmp")"
+  if [ "$total" -gt "$cap" ]; then trunc=1; fi
+  tail -n "$cap" "$tmp" | awk -v trunc="$trunc" "$AWK_LIB"'
+    BEGIN { printf "{\"queries\":[" }
+    {
+      printf "%s{\"at\":\"%s\",\"src\":\"%s\",\"name\":\"%s\",\"type\":\"%s\"}", \
+        (n++ ? "," : ""), rfc3339($1), rfc5952($2), jesc($3), jesc($4)
+    }
+    END { printf "]%s}\n", (trunc + 0 ? ",\"truncated\":true" : "") }'
+}
+
 show_dns() {
   if [ "${ENABLE_DNS_LOGGING}" != "true" ]; then
     echo "DNS の記録は無効です。"
@@ -122,14 +451,7 @@ show_dns() {
     return 0
   fi
   local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
-  # クライアントの問い合わせ（log-queries の出力）は
-  #   "... info: <接続元IP> <名前>. <型> <クラス>"
-  # の形。unbound 自身が出す "info: sending query: _ta-xxxx. NULL IN"（DNSSEC の
-  # トラストアンカー通知）等も末尾が IN で並びが同じため、接続元の位置が
-  # IP アドレスの字面（16進・ドット・コロンのみ）であることを条件に加えて除外する。
-  journalctl -u unbound --no-pager -o short-iso --since "$SINCE" 2>/dev/null \
-    | awk '$NF == "IN" && NF >= 5 && $(NF-3) ~ /^[0-9a-fA-F.:]+$/ \
-           {printf "%s %s %s %s\n", $1, $(NF-3), $(NF-2), $(NF-1)}' >"$tmp" || true
+  collect_dns >"$tmp"
   if [ ! -s "$tmp" ]; then
     echo "直近 ${HOURS} 時間の DNS 記録はありません。"
     echo "（端末が DoH/DoT を使っていると素の DNS が飛ばず記録されません。宛先IP は make access-log で確認できます）"
@@ -145,9 +467,239 @@ show_dns() {
   echo "全件: journalctl -u unbound --since '${SINCE}' | grep info:"
 }
 
+# =============================================================================
+# クライアント一覧
+#   WireGuard は wg0.conf の "# BEGIN client:NAME" 〜 "# END client:NAME" を読む。
+#   PrivateKey / PresharedKey は読まない。分析に不要であり、返した瞬間に会話ログと
+#   AI の文脈へ資格情報が流れるため。
+#   IKEv2 は証明書ベースで、VPN 内アドレスは接続時にプールから払い出されるため
+#   名前だけを返す（wg0.conf に相当する静的な対応表が存在しない）。
+# =============================================================================
+AWK_WGCONF='
+function emit(   n, i, parts, a, out) {
+  printf "%s{\"name\":\"%s\",\"public_key\":\"%s\",\"addresses\":[", \
+    (shown++ ? "," : ""), jesc(name), jesc(pub)
+  out = ""
+  n = split(addrs, parts, ",")
+  for (i = 1; i <= n; i++) {
+    a = parts[i]
+    sub(/^[ \t]+/, "", a); sub(/[ \t]+$/, "", a)
+    if (a == "") continue
+    out = out (out == "" ? "" : ",") "\"" jesc(rfc5952p(a)) "\""
+  }
+  printf "%s]}", out
+}
+BEGIN { printf "{\"clients\":[" }
+{
+  line = $0
+  sub(/\r$/, "", line)
+  sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line)
+  if (line ~ /^# BEGIN client:/) {
+    name = line
+    sub(/^# BEGIN client:[ \t]*/, "", name)
+    inblk = (name != ""); pub = ""; addrs = ""
+    next
+  }
+  if (line ~ /^# END client:/) {
+    if (inblk) emit()
+    inblk = 0
+    next
+  }
+  if (!inblk) next
+  eq = index(line, "=")
+  if (eq == 0) next
+  key = substr(line, 1, eq - 1); val = substr(line, eq + 1)
+  sub(/[ \t]+$/, "", key)
+  sub(/^[ \t]+/, "", val); sub(/[ \t]+$/, "", val)
+  if (key == "PublicKey") pub = val
+  else if (key == "AllowedIPs") addrs = val
+}
+END { if (inblk) emit(); printf "]}\n" }
+'
+
+ikev2_client_names() {
+  find "$CLIENT_DIR" -maxdepth 1 -name '*.mobileconfig' -printf '%f\n' 2>/dev/null \
+    | sed 's/\.mobileconfig$//' | sort || true
+}
+
+json_clients() {
+  if [ "$VPN_PROTOCOL" = "ikev2" ]; then
+    ikev2_client_names | awk "$AWK_LIB"'
+      BEGIN { printf "{\"clients\":[" }
+      $0 != "" { printf "%s{\"name\":\"%s\",\"public_key\":\"\",\"addresses\":[]}", (n++ ? "," : ""), jesc($0) }
+      END { printf "]}\n" }'
+    return 0
+  fi
+  if [ ! -f "$WG_CONF" ]; then
+    printf '{"clients":[]}\n'
+    return 0
+  fi
+  awk "$AWK_LIB$AWK_WGCONF" "$WG_CONF"
+}
+
+show_clients() {
+  echo "== 登録済みクライアント（protocol=${VPN_PROTOCOL}）=="
+  if [ "$VPN_PROTOCOL" = "ikev2" ]; then
+    ikev2_client_names | grep . || echo "（なし）"
+    echo
+    echo "※ IKEv2 の VPN 内アドレスは接続時にプールから払い出されます（固定の対応表はありません）"
+    return 0
+  fi
+  if [ ! -f "$WG_CONF" ]; then
+    echo "（${WG_CONF} がありません）"
+    return 0
+  fi
+  printf '%-24s %-46s %s\n' '名前' 'VPN内アドレス' '公開鍵'
+  awk '
+    /^# BEGIN client:/ { name = substr($0, 16); pub = ""; addrs = ""; next }
+    /^# END client:/   { if (name != "") printf "%-24s %-46s %s\n", name, addrs, pub; name = ""; next }
+    name != "" && $1 == "PublicKey"  { pub = $3 }
+    name != "" && $1 == "AllowedIPs" { $1 = ""; $2 = ""; sub(/^[ \t]+/, ""); addrs = $0 }
+  ' "$WG_CONF" | grep . || echo "（なし）"
+}
+
+# =============================================================================
+# ブロックリストとの照合
+#   matched は ipset test（カーネルの判定そのもの）を正とする。
+#   一致した entry は ipset save を走査して最長一致で求める（ipset test は
+#   どの要素に当たったかを返さないため）。一致時だけ走査するので普段は走らない。
+#   ipset は family inet で作られるため、IPv6 は構造上一致しない（出口検知の
+#   LOG ルールも v4 のみ）。よって IPv6 は matched=false が正しい答えになる。
+# =============================================================================
+blocklist_entry() { # $1 = IPv4
+  ipset save "$BLOCKLIST_SET" 2>/dev/null | awk -v ip="$1" -v set="$BLOCKLIST_SET" '
+    function ip2int(a,   p, n) {
+      n = split(a, p, ".")
+      if (n != 4) return -1
+      return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+    }
+    BEGIN { target = ip2int(ip); best = -1; bestentry = "" }
+    $1 == "add" && $2 == set && $4 != "nomatch" {
+      entry = $3
+      len = 32
+      s = index(entry, "/")
+      net = entry
+      if (s > 0) { len = substr(entry, s + 1) + 0; net = substr(entry, 1, s - 1) }
+      if (len < 0 || len > 32) next
+      ni = ip2int(net)
+      if (ni < 0 || target < 0) next
+      m = 2 ^ (32 - len)
+      if (int(target / m) == int(ni / m) && len > best) { best = len; bestentry = entry }
+    }
+    END { print bestentry }'
+}
+
+blocklist_check() { # $1 = IP。結果を BL_* に入れる
+  BL_MATCHED=false
+  BL_ENTRY=""
+  BL_ENTRIES=0
+  BL_UPDATED=""
+  command -v ipset >/dev/null 2>&1 || return 0
+  ipset list -n 2>/dev/null | grep -qx "$BLOCKLIST_SET" || return 0
+  BL_ENTRIES="$(ipset list -t "$BLOCKLIST_SET" 2>/dev/null \
+    | awk -F': *' '/^Number of entries/ {print $2 + 0; exit}')"
+  BL_ENTRIES="${BL_ENTRIES:-0}"
+  if [ -f "$BLOCKLIST_PERSIST" ]; then
+    BL_UPDATED="$(rfc3339_epoch "$(stat -c %Y "$BLOCKLIST_PERSIST" 2>/dev/null || echo 0)")"
+  fi
+  # v4 のみ（ipset は family inet）。v6 は照合対象が無いので matched=false のまま。
+  case "$1" in *:*) return 0 ;; esac
+  if ipset test "$BLOCKLIST_SET" "$1" >/dev/null 2>&1; then
+    BL_MATCHED=true
+    BL_ENTRY="$(blocklist_entry "$1")"
+  fi
+}
+
+json_blocklist() { # $1 = IP
+  blocklist_check "$1"
+  printf '{"matched":%s,"entry":"%s","source_url":"%s","updated_at":"%s","entries":%d}\n' \
+    "$(jbool "$BL_MATCHED")" "$(jstr "$BL_ENTRY")" "$(jstr "$ALERT_BLOCKLIST_URL")" \
+    "$(jstr "$BL_UPDATED")" "$BL_ENTRIES"
+}
+
+show_blocklist() { # $1 = IP
+  blocklist_check "$1"
+  echo "== ブロックリスト照合: $1 =="
+  if [ -z "$ALERT_BLOCKLIST_URL" ]; then
+    echo "  ALERT_BLOCKLIST_URL が未設定です（出口検知は常に 0 件）"
+    echo "  有効化: make configure-alerts（tfvars では alert_blocklist_url）"
+    return 0
+  fi
+  if [ "$BL_MATCHED" = "true" ]; then
+    echo "  判定  : 一致（既知悪性 IP）"
+    echo "  該当  : ${BL_ENTRY:-（範囲を特定できません）}"
+  else
+    echo "  判定  : 一致なし"
+    case "$1" in *:*) echo "        ※ ブロックリストは IPv4 のみ（ipset は family inet）" ;; esac
+  fi
+  echo "  リスト: ${ALERT_BLOCKLIST_URL}"
+  echo "  登録数: ${BL_ENTRIES}"
+  echo "  更新  : ${BL_UPDATED:-（不明）}"
+}
+
+# =============================================================================
+# ディスパッチ
+# =============================================================================
 case "$MODE" in
-  access) show_access ;;
-  dns)    show_dns ;;
-  status) show_status ;;
-  *)      die "使い方: orenovpn-logs {access|dns|status} [時間]" ;;
+  access)
+    if [ "$JSON" = "true" ]; then
+      SRC="${1:-0.0.0.0}"; HOURS="${2:-6}"
+      check_ip "$SRC" "接続元"
+      check_uint "$HOURS" "時間"
+      SINCE="${HOURS} hours ago"
+      collect_klog 'orenovpn-dst: ' | json_events "$SRC" "$JSON_MAX"
+    else
+      HOURS="${1:-6}"
+      check_uint "$HOURS" "時間"
+      SINCE="${HOURS} hours ago"
+      show_access
+    fi
+    ;;
+  dns)
+    if [ "$JSON" = "true" ]; then
+      SRC="${1:-0.0.0.0}"; HOURS="${2:-6}"
+      check_ip "$SRC" "接続元"
+      check_uint "$HOURS" "時間"
+      SINCE="${HOURS} hours ago"
+      json_dns "$SRC" "$JSON_MAX"
+    else
+      HOURS="${1:-6}"
+      check_uint "$HOURS" "時間"
+      SINCE="${HOURS} hours ago"
+      show_dns
+    fi
+    ;;
+  egress)
+    HOURS="${1:-6}"
+    check_uint "$HOURS" "時間"
+    SINCE="${HOURS} hours ago"
+    if [ "$JSON" = "true" ]; then
+      LIMIT="${2:-$JSON_MAX}"
+      check_uint "$LIMIT" "件数"
+      [ "$LIMIT" -ge 1 ] || die "件数は 1 以上で指定してください"
+      # 1 応答あたりの上限は JSON_MAX に一本化する。呼び出し側（MCP）は最大 10000 まで
+      # 要求できるが、access / dns が JSON_MAX で頭打ちなのに egress だけ倍返せると
+      # 「1 応答あたりの上限」が命令ごとに変わってしまう。切り詰めたことは
+      # json_events が truncated で申告するので、黙って減らすことにはならない。
+      [ "$LIMIT" -le "$JSON_MAX" ] || LIMIT="$JSON_MAX"
+      collect_klog 'orenovpn-egress: ' | json_events "" "$LIMIT"
+    else
+      show_egress
+    fi
+    ;;
+  clients)
+    if [ "$JSON" = "true" ]; then json_clients; else show_clients; fi
+    ;;
+  blocklist)
+    IP="${1:-}"
+    [ -n "$IP" ] || die "使い方: orenovpn-logs blocklist <IP>"
+    check_ip "$IP" "IP"
+    if [ "$JSON" = "true" ]; then json_blocklist "$IP"; else show_blocklist "$IP"; fi
+    ;;
+  status)
+    if [ "$JSON" = "true" ]; then json_status; else show_status; fi
+    ;;
+  *)
+    die "使い方: orenovpn-logs {access|dns|egress|clients|blocklist|status} [引数] [--json]"
+    ;;
 esac
