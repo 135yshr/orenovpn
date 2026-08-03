@@ -6,6 +6,7 @@
 #   make 経由で ORENOVPN_SSH に SSH コマンドを受け取って実行される。
 #
 #   環境変数: ACCESS_LOG=on|off  DNS_LOG=on|off  DAYS=<保存日数>
+#   DAYS を省略した場合は保存期間を変更しない（既存の値をそのまま残す）。
 #
 set -euo pipefail
 
@@ -21,11 +22,20 @@ norm() { # on|true|yes → true / それ以外は false（不正値はエラー�
 
 AL="$(norm "${ACCESS_LOG:-off}")"
 DL="$(norm "${DNS_LOG:-off}")"
-DAYS="${DAYS:-14}"
-case "$DAYS" in ''|*[!0-9]*) echo "エラー: DAYS は整数で指定してください" >&2; exit 1 ;; esac
-[ "$DAYS" -ge 1 ] || { echo "エラー: DAYS は 1 以上で指定してください" >&2; exit 1; }
 
-echo "設定を反映します: 宛先IP記録=${AL} / DNS記録=${DL} / 保存=${DAYS}日" >&2
+# DAYS を省略したときは保存期間を変更しない。既定値で必ず上書きしていた頃は、
+# ON/OFF を切り替えるだけのつもりでも保存期間が既定へ戻っていた（30 日運用の
+# サーバーが 14 日に戻り、それより古い記録を失いかけた）。
+DAYS="${DAYS:-}"
+if [ -n "$DAYS" ]; then
+  case "$DAYS" in *[!0-9]*) echo "エラー: DAYS は整数で指定してください" >&2; exit 1 ;; esac
+  [ "$DAYS" -ge 1 ] || { echo "エラー: DAYS は 1 以上で指定してください" >&2; exit 1; }
+  DAYS_MSG="${DAYS}日"
+else
+  DAYS_MSG="変更しない（現在の設定を維持）"
+fi
+
+echo "設定を反映します: 宛先IP記録=${AL} / DNS記録=${DL} / 保存=${DAYS_MSG}" >&2
 echo "※ サーバー上で setup.sh を再実行します（冪等）。ufw と VPN が一瞬再適用されるため、" >&2
 echo "   接続中の端末は再接続が必要になる場合があります。" >&2
 if [ "$DL" = true ]; then
@@ -38,7 +48,8 @@ fi
 fragment="$(
   printf 'ENABLE_ACCESS_LOG="%s"\n' "$AL"
   printf 'ENABLE_DNS_LOGGING="%s"\n' "$DL"
-  printf 'LOG_RETENTION_DAYS="%s"\n' "$DAYS"
+  [ -n "$DAYS" ] && printf 'LOG_RETENTION_DAYS="%s"\n' "$DAYS"
+  true
 )"
 
 REMOTE_MERGE='
@@ -48,7 +59,14 @@ ENVF=/etc/orenovpn/orenovpn.env
 new="$(mktemp)"
 frag="$(mktemp)"
 cat > "$frag"
-grep -vE "^(ENABLE_ACCESS_LOG|ENABLE_DNS_LOGGING|LOG_RETENTION_DAYS)=" "$ENVF" > "$new" || true
+# 断片に含まれるキーだけを既存から取り除く（含まれないキーは現状のまま残す）。
+# 固定の一覧で消していた頃は、渡していない LOG_RETENTION_DAYS まで消えたうえで
+# 既定値が書き戻され、保存期間が黙って変わっていた。
+cp "$ENVF" "$new"
+sed -n "s/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p" "$frag" | while read -r k; do
+  grep -v "^${k}=" "$new" > "${new}.f" || true
+  mv "${new}.f" "$new"
+done
 cat "$frag" >> "$new"
 install -m 600 -o root -g root "$new" "$ENVF"
 rm -f "$new" "$frag"
