@@ -676,12 +676,22 @@ blocklist_check() { # $1 = IP。結果を BL_* に入れる
   BL_MATCHED=false
   BL_ENTRY=""
   BL_ENTRIES=0
+  BL_EXCLUDED=0
   BL_UPDATED=""
   command -v ipset >/dev/null 2>&1 || return 0
   ipset list -n 2>/dev/null | grep -qx "$BLOCKLIST_SET" || return 0
+  # ipset の "Number of entries" は除外(nomatch)も数える。除外は「照合しても
+  # 一致させない」ための項目なので、照合対象の件数として見せると実態より多く
+  # 見える。除外だけが入っている（＝実質空で常に一致しない）状態も、この数え方
+  # では気付けない。doctor と同じく除外を引いた数を登録数とする。
   BL_ENTRIES="$(ipset list -t "$BLOCKLIST_SET" 2>/dev/null \
     | awk -F': *' '/^Number of entries/ {print $2 + 0; exit}')"
   BL_ENTRIES="${BL_ENTRIES:-0}"
+  BL_EXCLUDED="$(ipset save "$BLOCKLIST_SET" 2>/dev/null \
+    | awk -v set="$BLOCKLIST_SET" '$1 == "add" && $2 == set && $4 == "nomatch" { n++ } END { print n + 0 }')"
+  BL_EXCLUDED="${BL_EXCLUDED:-0}"
+  BL_ENTRIES=$((BL_ENTRIES - BL_EXCLUDED))
+  [ "$BL_ENTRIES" -ge 0 ] || BL_ENTRIES=0
   if [ -f "$BLOCKLIST_PERSIST" ]; then
     BL_UPDATED="$(rfc3339_epoch "$(stat -c %Y "$BLOCKLIST_PERSIST" 2>/dev/null || echo 0)")"
   fi
@@ -695,9 +705,9 @@ blocklist_check() { # $1 = IP。結果を BL_* に入れる
 
 json_blocklist() { # $1 = IP
   blocklist_check "$1"
-  printf '{"matched":%s,"entry":"%s","source_url":"%s","updated_at":"%s","entries":%d}\n' \
+  printf '{"matched":%s,"entry":"%s","source_url":"%s","updated_at":"%s","entries":%d,"excluded":%d}\n' \
     "$(jbool "$BL_MATCHED")" "$(jstr "$BL_ENTRY")" "$(jstr "$ALERT_BLOCKLIST_URL")" \
-    "$(jstr "$BL_UPDATED")" "$BL_ENTRIES"
+    "$(jstr "$BL_UPDATED")" "$BL_ENTRIES" "$BL_EXCLUDED"
 }
 
 show_blocklist() { # $1 = IP
@@ -716,7 +726,11 @@ show_blocklist() { # $1 = IP
     case "$1" in *:*) echo "        ※ ブロックリストは IPv4 のみ（ipset は family inet）" ;; esac
   fi
   echo "  リスト: ${ALERT_BLOCKLIST_URL}"
-  echo "  登録数: ${BL_ENTRIES}"
+  if [ "${BL_EXCLUDED:-0}" -gt 0 ]; then
+    echo "  登録数: ${BL_ENTRIES}（ほかに除外 ${BL_EXCLUDED} 件）"
+  else
+    echo "  登録数: ${BL_ENTRIES}"
+  fi
   echo "  更新  : ${BL_UPDATED:-（不明）}"
 }
 
