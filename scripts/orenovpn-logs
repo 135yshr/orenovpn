@@ -547,19 +547,21 @@ ikev2_active_addrs() {
       if (id == "" || id == "%any") next
       sub(/^CN=/, "", id)
       # 接続元の "1.2.3.4[4500]" を読み飛ばしてから、残った "[...]" を拾う。
-      # strongSwan(list_sas.c) は remote-vips を printf(" [%s]") で出しており、
-      # 複数割当は "[10.66.66.5, fd42:66:66::5]" のように 1 つの括弧へカンマ区切りで
-      # 入る。空白で区切ったフィールド単位に見ると、この形が丸ごと取りこぼされる
+      # strongSwan(list_sas.c) は remote-vips を printf(" [%s]") で出す。複数割当が
+      # 1 つの括弧に入るため、空白で区切ったフィールド単位に見ると丸ごと取りこぼす
       # （デュアルスタックのクライアントが常に「未接続」になる）。
+      #
+      # 括弧の中の区切りは実機で確認した空白（"[10.66.66.2 fd42:66:66::2]"）と、
+      # strongSwan のドキュメントにあるカンマ（"[10.1.2.3, 2001:db8::100]"）の
+      # 両方を受ける。版によって表記が違うため、片方に決め打ちしない。
       rest = $0
       if (match(rest, /@ [^ ]+/)) rest = substr(rest, RSTART + RLENGTH)
       while (match(rest, /\[[^]]*\]/)) {
         grp = substr(rest, RSTART + 1, RLENGTH - 2)
         rest = substr(rest, RSTART + RLENGTH)
-        na = split(grp, av, ",")
+        na = split(grp, av, /[ ,\t]+/)
         for (k = 1; k <= na; k++) {
           a = av[k]
-          gsub(/[ \t]/, "", a)
           if (a ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || (a ~ /:/ && a ~ /^[0-9A-Fa-f:]+$/)) \
             printf "%s\t%s\n", id, a
         }
