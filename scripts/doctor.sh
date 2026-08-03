@@ -203,9 +203,16 @@ if [ "$ALERT" = "true" ]; then
     MISSING=""
     # setup.sh の add_exceptions が入れる固定範囲をすべて検査する。一部だけ見ていると
     # 抜けた範囲（CGNAT・ループバック・限定ブロードキャスト）の誤検知が黙って再発する。
+    #
+    # 照合はプレフィクス長を落として比較する。ipset の hash:net は最大長のプレフィクスを
+    # 表示しないため、255.255.255.255/32 として登録した項目が `255.255.255.255 nomatch`
+    # と出る。/32 付きの文字列だけを探していた頃は、除外が入っているのに「除外されていない」
+    # と WARN が出続け、直しようのない警告として無視される状態になっていた。
     for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 \
       169.254.0.0/16 127.0.0.0/8 224.0.0.0/4 255.255.255.255/32; do
-      printf '%s\n' "$BLLIST" | grep -qE "^${net//./\\.} +nomatch" || MISSING="${MISSING}${net} "
+      pat="${net%/32}"
+      pat="${pat//./\\.}"
+      printf '%s\n' "$BLLIST" | grep -qE "^${pat}(/32)? +nomatch" || MISSING="${MISSING}${net} "
     done
     if [ -z "$MISSING" ]; then
       pass "ブロックリストに private 範囲の除外(nomatch)あり"
