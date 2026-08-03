@@ -403,10 +403,14 @@ AI の文脈に流れる。ローカルの stdio 接続なら手元で完結す�
 既存サーバーには tfvars の変更が届かない（cloud-init は初回のみ）ため、専用コマンドで反映します:
 
 ```bash
-make configure-logging ACCESS_LOG=on DNS_LOG=on DAYS=14   # 有効化して setup.sh を再実行
+make configure-logging ACCESS_LOG=on DNS_LOG=on DAYS=30   # 有効化して setup.sh を再実行
+make configure-logging ACCESS_LOG=on DNS_LOG=on           # 保存期間は変えずに ON/OFF だけ変更
 make configure-logging ACCESS_LOG=off DNS_LOG=off         # 無効化（ルールも撤去）
 make logs-status                                          # 有効/無効・適用ルール・待受を確認
 ```
+
+`DAYS` を省略したときは**保存期間を変更しません**（現在の値をそのまま残します）。
+`make logs-status` で今の値を確認できます。
 
 ### 参照
 

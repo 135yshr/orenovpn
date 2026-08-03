@@ -196,19 +196,30 @@ if [ "$ALERT" = "true" ]; then
     if $S iptables -S ufw-before-forward 2>/dev/null | grep -q 'orenovpn-egress'; then
       bad "旧方式の出口 LOG ルール(ufw-before-forward)が残存（戻り通信を誤検知）→ sudo /usr/local/sbin/setup.sh"
     fi
-    # ブロックリストに VPN サブネットの除外(nomatch)が入っているか
-    if $S ipset list orenovpn_blocklist 2>/dev/null | grep -q 'nomatch'; then
-      pass "ブロックリストに VPN サブネットの除外(nomatch)あり"
+    # ブロックリストに private 範囲の除外(nomatch)が入っているか。
+    # VPN サブネットだけを除外していた頃は、それ以外の private 宛（ブロードキャストへの
+    # NetBIOS 通知など）が良性なのに検知され、警告メールが飛び続けていた。
+    BLLIST="$($S ipset list orenovpn_blocklist 2>/dev/null)"
+    MISSING=""
+    # setup.sh の add_exceptions が入れる固定範囲をすべて検査する。一部だけ見ていると
+    # 抜けた範囲（CGNAT・ループバック・限定ブロードキャスト）の誤検知が黙って再発する。
+    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 \
+      169.254.0.0/16 127.0.0.0/8 224.0.0.0/4 255.255.255.255/32; do
+      printf '%s\n' "$BLLIST" | grep -qE "^${net//./\\.} +nomatch" || MISSING="${MISSING}${net} "
+    done
+    if [ -z "$MISSING" ]; then
+      pass "ブロックリストに private 範囲の除外(nomatch)あり"
     else
-      wrn "VPN サブネットが除外されていない（private 範囲を含むリストでは誤検知の原因）→ sudo /usr/local/sbin/orenovpn-egress-refresh"
+      wrn "ブロックリストで private 範囲が除外されていない: ${MISSING}（良性の内部通信を誤検知し警告が飛び続けます）→ sudo /usr/local/sbin/orenovpn-egress-refresh"
     fi
-    # 登録数。VPN サブネットの除外(nomatch)しか無い＝実質空で、この状態だと
-    # 出口検知も MCP の check_blocklist も常に「一致なし」を返し続ける。
-    n="$($S ipset list orenovpn_blocklist 2>/dev/null | grep -c '^[0-9]')"
-    if [ "${n:-0}" -le 1 ]; then
-      wrn "ブロックリストが空（登録数 ${n:-0}）。出口検知は常に 0 件になります → sudo /usr/local/sbin/orenovpn-egress-refresh で取得を確認"
+    # 登録数。除外(nomatch)しか無い＝実質空で、この状態だと出口検知も
+    # MCP の check_blocklist も常に「一致なし」を返し続ける。
+    n="$(printf '%s\n' "$BLLIST" | grep -c '^[0-9]')"
+    nomatch="$(printf '%s\n' "$BLLIST" | grep -c 'nomatch')"
+    if [ "$((n - nomatch))" -le 0 ]; then
+      wrn "ブロックリストが空（除外を除く登録数 $((n - nomatch))）。出口検知は常に 0 件になります → sudo /usr/local/sbin/orenovpn-egress-refresh で取得を確認"
     else
-      pass "ブロックリスト登録数: ${n}"
+      pass "ブロックリスト登録数: $((n - nomatch))（ほかに除外 ${nomatch} 件）"
     fi
   fi
   last="$($S systemctl show -p ExecMainStatus --value orenovpn-watch.service 2>/dev/null || echo '')"
