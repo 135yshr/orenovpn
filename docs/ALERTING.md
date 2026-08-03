@@ -197,6 +197,7 @@ make configure-alerts
 | `sudo orenovpn-logs egress [時間]` | 出口検知（既知悪性 IP への通信）の一覧と集計 |
 | `sudo orenovpn-logs blocklist <IP>` | その IP がブロックリストのどの範囲で一致したか |
 | `sudo orenovpn-logs clients` | 登録済みクライアントと VPN 内アドレスの対応 |
+| `make mcp-key` | MCP 用の公開鍵を forced command 付きで `authorized_keys` へ登録 |
 
 ## アラートを受け取った後の分析（orenovpn-mcp）
 
@@ -233,35 +234,65 @@ MCP が壊れても `make access-log` は今までどおり動く。
 ログを読ませるためにサーバーの管理権限ごと渡すことになる。専用の鍵を作り、
 `command=` で読み取り 6 コマンドだけに縛る。
 
+まず手元で MCP 専用の鍵を作る（パスフレーズなし。非対話で使うため）。
+
 ```bash
-# 1) 手元で MCP 専用の鍵を作る（パスフレーズなし。非対話で使うため）
 ssh-keygen -t ed25519 -f ~/.ssh/orenovpn-mcp -C orenovpn-mcp -N ''
 chmod 600 ~/.ssh/orenovpn-mcp
+```
 
-# 2) 接続先を控える（以降の手順で使う）
-HOST="$(terraform -chdir=terraform output -raw server_ip)"
-USER="$(terraform -chdir=terraform output -raw admin_user)"
+次に公開鍵を `authorized_keys` へ登録する。**`make` を使うこと。**
 
-# 3) ディスパッチャがサーバーに入っていることを確認（make setup / sync-scripts で配置される）
-ssh "${USER}@${HOST}" 'ls -l /usr/local/sbin/orenovpn-mcp-shell'
+```bash
+make mcp-key
+```
 
-# 4) 公開鍵を authorized_keys へ「必ず command= と restrict 付きで」追記する
-#    すべて手元で実行し、鍵の中身は標準入力で渡す（サーバー側のシェルで変数を
-#    展開させない。ログインしてから echo "... ${KEY}" と打つと KEY はサーバー側で
-#    未定義になり、鍵本体の入っていない不正な行が追記される）。
-{ printf 'command="/usr/local/sbin/orenovpn-mcp-shell",restrict '
-  cat ~/.ssh/orenovpn-mcp.pub
-} | ssh "${USER}@${HOST}" 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'
+`PUBKEY` を省略すると `~/.ssh/orenovpn-mcp.pub` を使う。別の場所に作ったなら
+`make mcp-key PUBKEY=~/.ssh/other.pub` のように渡す。既に登録済みなら重複追記しない。
 
-# 5) 追記された行を目視で確認する（オプションが行頭にあること）
-ssh "${USER}@${HOST}" 'tail -1 ~/.ssh/authorized_keys'
+実体は `scripts/register-mcp-key.sh` で、次のことをする。
 
-# 6) ホスト鍵の指紋を控える（MCP 側は StrictHostKeyChecking=no を持たない）
-ssh-keyscan -t ed25519 "$HOST" | ssh-keygen -lf -
+- `command="/usr/local/sbin/orenovpn-mcp-shell",restrict` を**鍵種別の前**に付けた行を
+  **1 行だけ**組み立てて追記する。公開鍵ファイルをそのまま流し込まない
+  （鍵が 2 本入ったファイルを `cat` すると、2 本目が forced command 無しで入り
+  **admin の全権を持つ鍵**になる）。鍵が 2 本以上あるファイルは受け付けない
+- 鍵種別と本体を型で検証する。**鍵コメントは元ファイルの値を使わず `orenovpn-mcp` に固定する**
+  （`-C` に任意の文字列を入れられるため。`make doctor` はこのコメントで MCP 用の鍵を識別する）
+- 同じ鍵が forced command 無しで既に入っていたら、登録済み扱いにせず**失敗する**
+  （黙って通すと `make doctor` が FAIL にする状態のまま「成功」と表示されてしまう）
+- 検査と追記を 1 回の SSH の中で `flock` 下に行う。`authorized_keys` の末尾に改行が無い
+  場合は補ってから追記する（補わないと直前の行と連結して両方の鍵が壊れる）
 
-# 7) 点検（command=/restrict の付け忘れとディスパッチャの配置を検査する）
+**手で `ssh` を打たないこと。** 理由は 2 つあり、どちらも実際に踏んだ:
+
+- **admin 鍵が渡らない。** サーバーへの接続鍵は `orenovpn.local.mk` の `SSH_KEY`
+  （または環境変数 `ORENOVPN_SSH_KEY`）に書いてあり、Makefile が `-i` で渡している。
+  素の `ssh user@host` は既定鍵を使うため `Permission denied (publickey)` になる。
+  実際の鍵は `make -n ssh` で確認できる。
+- **鍵本体の入らない行ができる。** 手元で `KEY=$(cat ...pub)` を設定してから
+  `make ssh` でサーバーへ入り、その先で `echo "... ${KEY}"` を実行すると、`KEY` は
+  サーバー側では未定義なので `command=...,restrict` だけの不正な行が追記される。
+
+登録できたらホスト鍵の指紋を控える（MCP 側は `StrictHostKeyChecking=no` を持たないため、
+`known_hosts` か指紋のどちらかが必須）。
+
+```bash
+ssh-keyscan -t ed25519 "$(terraform -chdir=terraform output -raw server_ip)" | ssh-keygen -lf -
+```
+
+最後に点検する。`command=`/`restrict` の付け忘れとディスパッチャの配置を検査する。
+
+```bash
 make doctor
 ```
+
+> **zsh で手作業する場合の注意**（`make mcp-key` を使うなら不要）
+>
+> - `HOST` は zsh のホスト名を保持する特殊変数で、代入するとプロンプトが変わる。
+>   自分で変数を置くなら `VPNHOST` のような名前にする。
+> - zsh は対話シェルでは既定で `#` をコメントとして扱わない
+>   （`interactive_comments` が off）。`VAR=値 # コメント` を貼り付けると
+>   代入がその行限りになり、以降で変数が空になる。行内コメントは貼らないこと。
 
 **オプションは必ず鍵種別（`ssh-ed25519`）より前に書く。** 後ろに書いたものは
 sshd から見ればただの鍵コメントで、制限は一切かからない（＝全権の鍵になる）。
@@ -301,6 +332,29 @@ ssh -i ~/.ssh/orenovpn-mcp <admin_user>@<server_ip> 'clients; id'  # 同上
 
 `clients` の JSON に `PrivateKey` / `PresharedKey` は**含まれない**。分析に不要であり、
 返した瞬間に会話ログと AI の文脈へ資格情報が流れるため。
+
+### クライアント名の逆引き（プロトコル差に注意）
+
+ログに出るのは VPN 内アドレス（`SRC=10.66.66.5`）だけなので、「どの端末か」を知るには
+`clients` の `addresses` と突き合わせる。この対応の性質がプロトコルで違う。
+
+| | WireGuard | IKEv2 |
+|---|---|---|
+| 対応の出どころ | `wg0.conf` の `AllowedIPs`（静的） | `swanctl --list-sas`（接続中のセッション） |
+| `addresses` の中身 | 常に入っている | **接続中のクライアントのみ**。未接続は空 |
+| `address_source` | 付かない | `ikev2-active-session` / `none` |
+
+**IKEv2 の対応は「今この瞬間」のものである。** アドレスはプールから払い出され、切断後は
+別の端末へ再割当される。したがって**過去のログの接続元を現在の対応表で引くと、別の端末に
+誤って帰属させうる**。
+
+- 直近のアラート（数分〜数十分前）を、その端末が接続したまま調べる場合は概ね正しい
+- 数時間〜数日前のログを後から調べる場合は、当てにしてはいけない
+- 判断の根拠にする前に `sudo swanctl --list-sas` で現在の割当を自分で確認する
+
+MCP の応答には収集時刻（`collected_at`）が必ず入るので、対応表が「いつの時点のものか」は
+そこで判断する。時刻で区切った正確な帰属には接続履歴そのものが要るため、
+orenovpn-mcp 第2弾の「VPN セッション」ツールで扱う。
 
 呼び出しは journal に記録される（誰がいつ何を読んだか）:
 

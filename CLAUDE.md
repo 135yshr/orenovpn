@@ -21,6 +21,7 @@ make doctor         # サーバー構成の自己診断（scripts/doctor.sh を�
 make client NAME=x  # クライアント追加。make clients / show / remove も同様
 make access-log     # 記録した接続先(宛先IP)を表示。make dns-log / logs-status も同様
 make configure-logging ACCESS_LOG=on DNS_LOG=on  # 既存サーバーの記録機能を ON/OFF
+make mcp-key        # MCP 用の公開鍵を forced command 付きで authorized_keys へ登録
 make images FILTER=debian   # 利用可能な OS イメージ名を確認（image_name 設定の前に）
 ```
 
@@ -64,6 +65,7 @@ make images FILTER=debian   # 利用可能な OS イメージ名を確認（imag
 - **IKEv2 の証明書失効(CRL)は既定 ON**（`enable_cert_revocation = true`）。OFF にすると `make remove` が「ファイル削除だけ」になり、漏洩した証明書を 10 年間止められない。`ikev2-client remove` は失効できなかった場合に証明書の原本を**残す**（消すと将来も失効できなくなる）。
 - **`make setup` は VPN を切断した状態で実行する**。途中で strongSwan / wg-quick を再起動するため、VPN 経由の SSH（フルトンネルなのでサーバーへの SSH もトンネル内を通る）だと接続ごと切れて構成が中断する。setup.sh は `SSH_CONNECTION` の接続元が VPN サブネット内なら実行を拒否する（`ORENOVPN_ALLOW_VPN_SETUP=1` で上書き可）。
 - **SSH は 22 番固定**（Debian の SSH ソケットアクティベーションでポート変更が反映されず接続不能になり得るため機能として持たない）。防御は鍵認証＋fail2ban＋`allowed_ssh_cidr`。
+- **IKEv2 の「VPN 内アドレス → クライアント名」は点の情報でしかない**。IKEv2 には `wg0.conf` のような静的な対応表が無く、アドレスは接続のたびにプールから払い出される。`orenovpn-logs clients --json` は `swanctl --list-sas` の **ESTABLISHED な SA** から現在の割当を返し、`address_source` に `ikev2-active-session` を立てる（認証前の半開き SA は remote の ID が `%any` なので必ず除外する。含めると身元不明の接続を実在の端末に結び付けてしまう）。**切断後にアドレスは再利用されるため、過去のログをこの対応で引くと誤帰属する**。時刻で区切った帰属が要るなら接続履歴そのものを持つ必要がある。
 - **`orenovpn-mcp-shell` が MCP 連携の唯一のセキュリティ境界**（セキュリティ不変条件）。admin の NOPASSWD sudo は生きているため、ここを抜かれると全部抜ける。`$SSH_ORIGINAL_COMMAND` を**シェルに渡さない**（`eval` / `sh -c` を使わない）。`read -ra` で配列へ分解し `case` で完全一致判定してから、スクリプト内に固定で書いた引数配列で `sudo` を exec する。引数は型（整数・IP アドレス書式）で検証し、許可されないものは**エラー内容を返さず終了コードのみ**。許可リストは読み取り 6 コマンドのみで、書き込み系（削除・失効・設定変更）を足さない。`authorized_keys` 側の `command=` と `restrict` を付け忘れると全権の鍵になるため、`make doctor` がこれを検査する。
 - **`NAME` 引数のインジェクション対策**: Makefile は `NAME` をレシピ文字列に展開せず `export NAME` で環境変数として渡し、`NAMECHECK`（英数・ハイフン・アンダースコアのみ）で検証してから `$$NAME` を参照する。クライアント名を扱う新ターゲットでも必ず `@$(NAMECHECK)` を冒頭に置き、同じ方式を守る。
 - OS は cloud-init + apt 前提のため **Debian / Ubuntu 系のみ**（RHEL 系不可）。512MB プランでは `setup.sh` が apt のメモリ不足を防ぐため swap を確保する。

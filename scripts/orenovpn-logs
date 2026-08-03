@@ -522,11 +522,78 @@ ikev2_client_names() {
     | sed 's/\.mobileconfig$//' | sort || true
 }
 
+# IKEv2 の接続中セッションから「クライアント名 <TAB> 払い出された VPN 内アドレス」を得る。
+#
+# IKEv2 には wg0.conf のような静的な対応表が無く、VPN 内アドレスは接続のたびに
+# プールから払い出される。そのため「10.66.66.5 はどの端末か」は接続中のセッションを
+# 見るしかない。
+#
+# ★この対応は「今この瞬間」のものでしかない。プールのアドレスは切断後に再利用される
+#   ため、過去のログの SRC を現在の割当で引くと別の端末に誤帰属しうる。呼び出し側は
+#   収集時刻とセットで扱うこと（MCP は応答に collected_at を必ず付ける）。
+#
+# 認証が完了した SA だけを見る。IKE_AUTH 前の半開き SA は相手の身元が不明で
+# remote の ID が '%any' のままなので、数えると身元不明の接続を実在の端末に
+# 結び付けてしまう（watch.sh が同じ理由で ESTABLISHED のみを見ている）。
+ikev2_active_addrs() {
+  command -v swanctl >/dev/null 2>&1 || return 0
+  swanctl --list-sas 2>/dev/null | awk '
+    /^[^ \t].*, IKEv2,/ { est = (index($0, ", ESTABLISHED,") > 0); next }
+    !est || $1 != "remote" { next }
+    {
+      id = ""
+      # remote \047<証明書ID>\047 @ <接続元IP>[<ポート>] [<払い出されたVPN内アドレス>]
+      if (match($0, /remote \047[^\047]+\047/)) id = substr($0, RSTART + 8, RLENGTH - 9)
+      if (id == "" || id == "%any") next
+      sub(/^CN=/, "", id)
+      # 接続元の "1.2.3.4[4500]" を読み飛ばしてから、残った "[...]" を拾う。
+      # strongSwan(list_sas.c) は remote-vips を printf(" [%s]") で出しており、
+      # 複数割当は "[10.66.66.5, fd42:66:66::5]" のように 1 つの括弧へカンマ区切りで
+      # 入る。空白で区切ったフィールド単位に見ると、この形が丸ごと取りこぼされる
+      # （デュアルスタックのクライアントが常に「未接続」になる）。
+      rest = $0
+      if (match(rest, /@ [^ ]+/)) rest = substr(rest, RSTART + RLENGTH)
+      while (match(rest, /\[[^]]*\]/)) {
+        grp = substr(rest, RSTART + 1, RLENGTH - 2)
+        rest = substr(rest, RSTART + RLENGTH)
+        na = split(grp, av, ",")
+        for (k = 1; k <= na; k++) {
+          a = av[k]
+          gsub(/[ \t]/, "", a)
+          if (a ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || (a ~ /:/ && a ~ /^[0-9A-Fa-f:]+$/)) \
+            printf "%s\t%s\n", id, a
+        }
+      }
+    }' || true
+}
+
 json_clients() {
   if [ "$VPN_PROTOCOL" = "ikev2" ]; then
-    ikev2_client_names | awk "$AWK_LIB"'
-      BEGIN { printf "{\"clients\":[" }
-      $0 != "" { printf "%s{\"name\":\"%s\",\"public_key\":\"\",\"addresses\":[]}", (n++ ? "," : ""), jesc($0) }
+    local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+    ikev2_active_addrs >"$tmp"
+    ikev2_client_names | awk -v mapfile="$tmp" "$AWK_LIB"'
+      BEGIN {
+        printf "{\"clients\":["
+        while ((getline line < mapfile) > 0) {
+          if (split(line, f, "\t") < 2) continue
+          if (index(" " seen[f[1]] " ", " " f[2] " ") > 0) continue
+          seen[f[1]] = seen[f[1]] " " f[2]
+          addr[f[1]] = addr[f[1]] (addr[f[1]] == "" ? "" : ",") f[2]
+        }
+        close(mapfile)
+      }
+      $0 != "" {
+        out = ""
+        if ($0 in addr) {
+          m = split(addr[$0], parts, ",")
+          for (i = 1; i <= m; i++) {
+            a = parts[i]
+            out = out (out == "" ? "" : ",") "\"" jesc(rfc5952(a)) (index(a, ":") ? "/128" : "/32") "\""
+          }
+        }
+        printf "%s{\"name\":\"%s\",\"public_key\":\"\",\"addresses\":[%s],\"address_source\":\"%s\"}", \
+          (n++ ? "," : ""), jesc($0), out, (out == "" ? "none" : "ikev2-active-session")
+      }
       END { printf "]}\n" }'
     return 0
   fi
@@ -540,9 +607,23 @@ json_clients() {
 show_clients() {
   echo "== 登録済みクライアント（protocol=${VPN_PROTOCOL}）=="
   if [ "$VPN_PROTOCOL" = "ikev2" ]; then
-    ikev2_client_names | grep . || echo "（なし）"
+    local tmp; tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
+    ikev2_active_addrs >"$tmp"
+    printf '%-24s %s\n' '名前' '現在の VPN 内アドレス（接続中のみ）'
+    ikev2_client_names | awk -v mapfile="$tmp" "$AWK_LIB"'
+      BEGIN {
+        while ((getline line < mapfile) > 0) {
+          if (split(line, f, "\t") < 2) continue
+          addr[f[1]] = addr[f[1]] (addr[f[1]] == "" ? "" : " ") rfc5952(f[2])
+        }
+        close(mapfile)
+      }
+      $0 != "" { printf "%-24s %s\n", $0, ($0 in addr ? addr[$0] : "（未接続）") }' \
+      | grep . || echo "（なし）"
     echo
-    echo "※ IKEv2 の VPN 内アドレスは接続時にプールから払い出されます（固定の対応表はありません）"
+    echo "※ IKEv2 の VPN 内アドレスは接続時にプールから払い出されます（固定の対応表はありません）。"
+    echo "  上の対応は「今この瞬間」のもので、切断後は別の端末へ再割当されます。過去のログの"
+    echo "  接続元をこの表で引くと誤った端末に結び付くことがあります。"
     return 0
   fi
   if [ ! -f "$WG_CONF" ]; then
