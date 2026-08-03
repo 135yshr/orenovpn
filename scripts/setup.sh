@@ -166,13 +166,26 @@ SET=orenovpn_blocklist
 PERSIST=/etc/orenovpn/blocklist.ipset
 log() { printf '[egress-refresh] %s\n' "$*" >&2; }
 
-# 自分の VPN サブネットは検知対象から除外する。公開ブロックリスト（FireHOL level1 等）は
-# private 範囲（10.0.0.0/8 など）を含むため、除外しないと VPN 内アドレスが常に「悪性」
-# 判定になり、誤検知が大量に出る（実機で 5 分間に 14,188 件を記録した）。
-# hash:net は最長一致で nomatch が優先されるため、より具体的な VPN サブネットを
-# nomatch として入れておけばよい。
+# private / 特殊用途のアドレスは検知対象から除外する。公開ブロックリスト
+# （FireHOL level1 等）は private 範囲（10.0.0.0/8 など）を含むため、除外しないと
+# 内部宛の通信が常に「悪性」判定になり誤検知が大量に出る（実機で 5 分間に 14,188 件）。
+# hash:net は最長一致で nomatch が優先されるため、nomatch を入れておけばよい。
+#
+# VPN サブネットだけを除外していた頃は、それ以外の private 宛が取りこぼされていた。
+# 実機では macOS の NetBIOS 名前通知（UDP/137 → 10.255.255.255）が 1 日に数件
+# 「不審な出口通信」として警告メールになっていた。良性の通信で警告が飛び続けると
+# 本物の検知を見落とすため、範囲ごと除外する。
+#
+# 検知力は落ちない。この機能の目的は「VPN 経由で外部の既知悪性 IP へ出る通信」の
+# 検知であり、private 宛はそもそも VPN の外へ出ない（C2 通信はグローバル IP を使う）。
 add_exceptions() {
-  ipset add -exist "$1" "$WG_SUBNET_V4" nomatch 2>/dev/null || true
+  local net
+  for net in "$WG_SUBNET_V4" \
+    10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 \
+    100.64.0.0/10 169.254.0.0/16 127.0.0.0/8 \
+    224.0.0.0/4 255.255.255.255/32; do
+    ipset add -exist "$1" "$net" nomatch 2>/dev/null || true
+  done
 }
 
 ipset create -exist "$SET" hash:net family inet maxelem 262144
