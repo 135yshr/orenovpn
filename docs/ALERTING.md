@@ -250,9 +250,20 @@ make mcp-key
 `PUBKEY` を省略すると `~/.ssh/orenovpn-mcp.pub` を使う。別の場所に作ったなら
 `make mcp-key PUBKEY=~/.ssh/other.pub` のように渡す。既に登録済みなら重複追記しない。
 
-`make mcp-key` は `command="/usr/local/sbin/orenovpn-mcp-shell",restrict` を**鍵種別の前**に
-付けて追記し、追記後の行を表示する。**手で `ssh` を打たないこと。** 理由は 2 つあり、
-どちらも実際に踏んだ:
+実体は `scripts/register-mcp-key.sh` で、次のことをする。
+
+- `command="/usr/local/sbin/orenovpn-mcp-shell",restrict` を**鍵種別の前**に付けた行を
+  **1 行だけ**組み立てて追記する。公開鍵ファイルをそのまま流し込まない
+  （鍵が 2 本入ったファイルを `cat` すると、2 本目が forced command 無しで入り
+  **admin の全権を持つ鍵**になる）。鍵が 2 本以上あるファイルは受け付けない
+- 鍵種別と本体を型で検証する。**鍵コメントは元ファイルの値を使わず `orenovpn-mcp` に固定する**
+  （`-C` に任意の文字列を入れられるため。`make doctor` はこのコメントで MCP 用の鍵を識別する）
+- 同じ鍵が forced command 無しで既に入っていたら、登録済み扱いにせず**失敗する**
+  （黙って通すと `make doctor` が FAIL にする状態のまま「成功」と表示されてしまう）
+- 検査と追記を 1 回の SSH の中で `flock` 下に行う。`authorized_keys` の末尾に改行が無い
+  場合は補ってから追記する（補わないと直前の行と連結して両方の鍵が壊れる）
+
+**手で `ssh` を打たないこと。** 理由は 2 つあり、どちらも実際に踏んだ:
 
 - **admin 鍵が渡らない。** サーバーへの接続鍵は `orenovpn.local.mk` の `SSH_KEY`
   （または環境変数 `ORENOVPN_SSH_KEY`）に書いてあり、Makefile が `-i` で渡している。

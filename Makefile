@@ -138,32 +138,12 @@ logs-status: ## 記録機能の有効/無効・適用ルール・待受を表示
 	@$(SSH) 'sudo orenovpn-logs status'
 
 mcp-key: ## MCP用の公開鍵を forced command 付きで登録  例: make mcp-key PUBKEY=~/.ssh/orenovpn-mcp.pub
+# 実体はスクリプト側に置く（configure-alerts / configure-logging と同じ方式）。
 # 手順書に素の ssh を書くと admin 鍵（SSH_KEY / orenovpn.local.mk）が渡らず
-# "Permission denied (publickey)" になる。Makefile の $(SSH) を使えば接続情報が
-# 一箇所に揃うため、このターゲットを入口にする。
-# 鍵本体はサーバー側のシェルへ展開させず標準入力で渡す（ログイン後に
-# echo "... $$KEY" と打つと KEY はサーバー側で未定義になり、鍵の入らない
-# 不正な行が追記される）。
-	@PUB="$${PUBKEY:-$$HOME/.ssh/orenovpn-mcp.pub}"; \
-	if [ ! -f "$$PUB" ]; then \
-	  echo "公開鍵が見つかりません: $$PUB"; \
-	  echo "→ ssh-keygen -t ed25519 -f ~/.ssh/orenovpn-mcp -C orenovpn-mcp -N '' で作成してください"; \
-	  exit 1; \
-	fi; \
-	BODY="$$(awk 'NR == 1 {print $$2}' "$$PUB")"; \
-	case "$$BODY" in \
-	  ''|*[!A-Za-z0-9+/=]*) echo "公開鍵の形式が不正です: $$PUB"; exit 1 ;; \
-	esac; \
-	if $(SSH) "grep -qF '$$BODY' ~/.ssh/authorized_keys 2>/dev/null"; then \
-	  echo "既に登録済みです（重複して追記しません）。"; \
-	else \
-	  { printf 'command="/usr/local/sbin/orenovpn-mcp-shell",restrict '; cat "$$PUB"; } \
-	    | $(SSH) 'umask 077; mkdir -p ~/.ssh; cat >> ~/.ssh/authorized_keys'; \
-	  echo "登録しました。"; \
-	fi; \
-	echo "--- authorized_keys の該当行（オプションが鍵種別より前にあること）---"; \
-	$(SSH) "grep -F '$$BODY' ~/.ssh/authorized_keys"; \
-	echo "→ 確認: make doctor / ssh -i $${PUB%.pub} $(SSH_USER)@$(SSH_HOST) clients"
+# "Permission denied (publickey)" になるため、接続は必ず $(SSH) を通す。
+# レシピに書かずスクリプトにするのは、認証情報を扱う判定を shellcheck / bash -n
+# （make check ＝ CI）の検証対象に載せるため。
+	@ORENOVPN_SSH="$(SSH)" bash scripts/register-mcp-key.sh
 
 client: ## クライアントを追加   例: make client NAME=my-phone
 	@$(NAMECHECK)

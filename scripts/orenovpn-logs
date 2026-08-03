@@ -546,11 +546,23 @@ ikev2_active_addrs() {
       if (match($0, /remote \047[^\047]+\047/)) id = substr($0, RSTART + 8, RLENGTH - 9)
       if (id == "" || id == "%any") next
       sub(/^CN=/, "", id)
-      for (i = 1; i <= NF; i++) {
-        # 接続元は "1.2.3.4[4500]" と地続きなので、単独の "[...]" だけが仮想アドレス
-        if ($i !~ /^\[.*\]$/) continue
-        a = substr($i, 2, length($i) - 2)
-        if (a ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || a ~ /:/) printf "%s\t%s\n", id, a
+      # 接続元の "1.2.3.4[4500]" を読み飛ばしてから、残った "[...]" を拾う。
+      # strongSwan(list_sas.c) は remote-vips を printf(" [%s]") で出しており、
+      # 複数割当は "[10.66.66.5, fd42:66:66::5]" のように 1 つの括弧へカンマ区切りで
+      # 入る。空白で区切ったフィールド単位に見ると、この形が丸ごと取りこぼされる
+      # （デュアルスタックのクライアントが常に「未接続」になる）。
+      rest = $0
+      if (match(rest, /@ [^ ]+/)) rest = substr(rest, RSTART + RLENGTH)
+      while (match(rest, /\[[^]]*\]/)) {
+        grp = substr(rest, RSTART + 1, RLENGTH - 2)
+        rest = substr(rest, RSTART + RLENGTH)
+        na = split(grp, av, ",")
+        for (k = 1; k <= na; k++) {
+          a = av[k]
+          gsub(/[ \t]/, "", a)
+          if (a ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$/ || (a ~ /:/ && a ~ /^[0-9A-Fa-f:]+$/)) \
+            printf "%s\t%s\n", id, a
+        }
       }
     }' || true
 }
