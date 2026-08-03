@@ -201,7 +201,10 @@ if [ "$ALERT" = "true" ]; then
     # NetBIOS 通知など）が良性なのに検知され、警告メールが飛び続けていた。
     BLLIST="$($S ipset list orenovpn_blocklist 2>/dev/null)"
     MISSING=""
-    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 169.254.0.0/16 224.0.0.0/4; do
+    # setup.sh の add_exceptions が入れる固定範囲をすべて検査する。一部だけ見ていると
+    # 抜けた範囲（CGNAT・ループバック・限定ブロードキャスト）の誤検知が黙って再発する。
+    for net in 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 \
+      169.254.0.0/16 127.0.0.0/8 224.0.0.0/4 255.255.255.255/32; do
       printf '%s\n' "$BLLIST" | grep -qE "^${net//./\\.} +nomatch" || MISSING="${MISSING}${net} "
     done
     if [ -z "$MISSING" ]; then

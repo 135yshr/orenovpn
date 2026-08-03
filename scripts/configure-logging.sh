@@ -45,11 +45,15 @@ fi
 
 # 値は検証済みの固定語彙のみ。リモート側スクリプトはユーザー入力を含まない固定文字列とし、
 # 設定断片は stdin のデータとして渡す（コマンド列に展開しない）。
+# if で書くのは、条件が偽のときに終了ステータスを 0 にするため。
+# `[ ... ] && printf ...` の後ろに true を置くと、条件だけでなく printf の失敗まで
+# 隠れてしまい、欠けた断片をそのままサーバーへ送ることになる。
 fragment="$(
   printf 'ENABLE_ACCESS_LOG="%s"\n' "$AL"
   printf 'ENABLE_DNS_LOGGING="%s"\n' "$DL"
-  [ -n "$DAYS" ] && printf 'LOG_RETENTION_DAYS="%s"\n' "$DAYS"
-  true
+  if [ -n "$DAYS" ]; then
+    printf 'LOG_RETENTION_DAYS="%s"\n' "$DAYS"
+  fi
 )"
 
 REMOTE_MERGE='
@@ -63,8 +67,22 @@ cat > "$frag"
 # 固定の一覧で消していた頃は、渡していない LOG_RETENTION_DAYS まで消えたうえで
 # 既定値が書き戻され、保存期間が黙って変わっていた。
 cp "$ENVF" "$new"
-sed -n "s/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p" "$frag" | while read -r k; do
-  grep -v "^${k}=" "$new" > "${new}.f" || true
+# キーの一覧を変数に取ってから for で回す。パイプの while だと本体が subshell に
+# なり、中で失敗を検出して exit しても外側へ伝わらない。
+# キーは断片側で [A-Z_][A-Z0-9_]* に限っているため、単語分割で壊れない。
+keys="$(sed -n "s/^\([A-Z_][A-Z0-9_]*\)=.*/\1/p" "$frag")"
+for k in $keys; do
+  # grep の終了コードは 0=一致あり / 1=一致なし / 2 以上=エラー。
+  # 1 は「全行が該当キーだった」という正常な場合なので通すが、2 以上で
+  # そのまま mv すると、読めなかった等の理由で空になったファイルを
+  # env として書き込んでしまう（設定の全消失）。
+  st=0
+  grep -v "^${k}=" "$new" > "${new}.f" || st=$?
+  if [ "$st" -gt 1 ]; then
+    echo "env の更新に失敗しました（grep 終了コード ${st}）。設定は変更していません。" >&2
+    rm -f "$new" "${new}.f" "$frag"
+    exit 1
+  fi
   mv "${new}.f" "$new"
 done
 cat "$frag" >> "$new"
