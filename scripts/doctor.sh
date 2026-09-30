@@ -249,6 +249,10 @@ if [ "$ALERT" = "true" ]; then
     LR_AGE=$(( $(date +%s) - LR_EPOCH ))
     if [ "$LR_EPOCH" -le 0 ]; then
       bad "監視の last_run を解釈できない（${LASTRUN}）"
+    elif [ "$LR_AGE" -lt 0 ]; then
+      # 未来の時刻は経過時間が負になり、古さの判定をすり抜けて「正常」に見えてしまう。
+      # 監視が止まっていても last_run の時刻を過ぎるまで検知できないため FAIL にする。
+      bad "監視の last_run が未来の時刻（${LASTRUN}）→ 時刻ずれか状態ファイルの破損。sudo journalctl -u orenovpn-watch -n 50"
     elif [ "$LR_AGE" -gt 900 ]; then
       bad "監視が $((LR_AGE / 60)) 分前から更新されていない（last_run=${LASTRUN}）→ sudo journalctl -u orenovpn-watch -n 50"
     else

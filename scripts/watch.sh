@@ -108,7 +108,13 @@ compute_since() {
     return 0
   fi
   ts="$(cat "$f" 2>/dev/null || true)"
-  epoch="$(date -d "$ts" +%s 2>/dev/null || echo 0)"
+  # 空文字は date に渡さない。GNU date は -d "" を「今日の 00:00」として受けるため、
+  # 書き込み失敗などで last_run が空になると、深夜 0〜1 時の間だけ上限検査をすり抜けて
+  # SINCE="" になる。journalctl は空の期間を解釈できないので、全検知が黙って 0 件になる。
+  epoch=0
+  if [ -n "$ts" ]; then
+    epoch="$(date -d "$ts" +%s 2>/dev/null || echo 0)"
+  fi
   now="$(date +%s)"
   # 読めない・未来（時刻ずれ）・上限超過はすべて上限へ丸める
   if [ "${epoch:-0}" -le 0 ] || [ "$epoch" -gt "$now" ] \
@@ -215,7 +221,7 @@ ${entries}
   ※ 自分の作業（make setup / make client 等）でも届きます。除外したい接続元があれば
      /etc/orenovpn/orenovpn.env の ALERT_SSH_LOGIN_IGNORE_IPS に IP を並べてください
      （現在: ${ALERT_SSH_LOGIN_IGNORE_IPS:-未設定}）。通知自体を止めるなら
-     ENABLE_SSH_LOGIN_ALERT=\"false\"。"
+     ENABLE_SSH_LOGIN_ALERT=\"false\"。$(window_note)"
 }
 
 # ---- (2) 新規 VPN 接続（WireGuard）-----------------------------------------
