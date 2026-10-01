@@ -413,6 +413,42 @@ ConoHa VPS Ver.3.0 上に本テンプレートで VPN を実際に構築する�
   自分自身のアドレスや `%any` のようなプレースホルダを混ぜると、受け取った側が
   「知らない IP から入られた」と誤読する。
 
+## 26. IKEv2 が接続から毎回きっかり同じ時間（macOS で 24 分）で切れる（PFS の不一致）
+
+- **症状**: 接続はできるが、確立から**毎回同じ経過時間**で切断される。実機（macOS）では
+  14:33:17→14:57:17、15:01:40→15:25:41、15:39:14→16:03:15 と、すべて 24 分ちょうど。
+  端末側は自動再接続しないため、利用者には「勝手に切れる」と見える。
+- **原因**: CHILD_SA の rekey で PFS の有無が食い違っていた。サーバーは `esp_proposals` を
+  DH 群付き（`aes256-sha256-modp2048,aes256gcm16-ecp384`）だけにして PFS を必須にしているが、
+  `.mobileconfig` に `EnablePFS` が無く、**Apple の既定は PFS 無効**。端末起点の rekey 要求が
+  KE ペイロード無しで届き、一致する提案が無いため拒否される。拒否された端末は
+  CHILD_SA に続けて IKE_SA も削除する＝接続ごと切れる。
+- **切り分け**: 切断の直前に以下が並べばこれ（要求のペイロードに `KE` が無い点が決め手）。
+  ```
+  sudo journalctl -u strongswan --since '-1d' | grep -E 'established|CREATE_CHILD_SA|failed to establish CHILD_SA|received DELETE'
+  parsed CREATE_CHILD_SA request 5 [ N(REKEY_SA) SA No TSi TSr ]
+  failed to establish CHILD_SA, keeping IKE_SA
+  received DELETE for IKE_SA orenovpn[N]
+  ```
+  `make doctor` は `EnablePFS` の無い古いプロファイルを WARN で列挙する。
+- **対処**: `ikev2-client` が生成するプロファイルの IKEv2 辞書に `EnablePFS = 1` を追加。
+  **既存のプロファイルは作り直して端末へ入れ直す必要がある**（プロファイルは生成時点の内容で
+  固定されるため、サーバー側の更新だけでは直らない）:
+  ```
+  make sync-scripts
+  make remove NAME=mac && make client NAME=mac    # 古い証明書は失効され、同名で再発行される
+  make profile NAME=mac                            # 端末の古いプロファイルを削除してから入れ直す
+  ```
+  `make remove` が古い証明書を失効させるのは、失効機能が有効（`enable_cert_revocation = true`、
+  既定）で、かつ失効に成功した場合だけ。出力に「証明書を失効(CRL)しました」が出ない場合、
+  古い証明書は**まだ接続に使える**（サーバー上の配布物が消えるだけ）。その場合は表示される
+  理由に従って対処する。
+- **学び**: サーバーで PFS を必須にしたとき、**相手が PFS を使う設定になっているか**までは
+  確かめていなかった（`docs/RETROSPECTIVE.md` の「継続観察」のまま残っていた）。
+  サーバー起点の rekey（1 時間）より先に**端末起点の rekey** が来るため、切断はサーバー側の
+  設定値と無関係な時刻に起きる。サーバー側で提案に DH 群無しを足せば即座に直るが、
+  それは PFS の格下げを受け入れることになるため採らない。
+
 ## セキュリティ上の不変条件（壊すと「認証なしで入れる」状態に戻る）
 
 1. **配信サーバーに `SimpleHTTPRequestHandler` を使わない**。autoindex で URL トークンが

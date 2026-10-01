@@ -129,6 +129,9 @@ cmd_add() {
         <key>PayloadCertificateUUID</key><string>${u_p12}</string>
         <key>ServerCertificateIssuerCommonName</key><string>${CA_CN}</string>
         <key>ExtendedAuthEnabled</key><integer>0</integer>
+        <!-- サーバーの esp_proposals は DH 群必須(PFS)。Apple の既定は PFS 無効で、
+             端末起点の CHILD_SA rekey が KE 無しで届き拒否され、接続ごと切れる。 -->
+        <key>EnablePFS</key><integer>1</integer>
         <key>IKESecurityAssociationParameters</key>
         <dict>
           <key>EncryptionAlgorithm</key><string>AES-256</string>
