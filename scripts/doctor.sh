@@ -115,9 +115,9 @@ if [ "$PROTO" = "ikev2" ]; then
   # 端末起点の rekey が拒否され、接続から一定時間(macOS で約 24 分)で毎回切断される。
   NOPFS="$($S sh -c 'for f in /etc/orenovpn/clients/*.mobileconfig; do [ -f "$f" ] || continue; grep -q "<key>EnablePFS</key>" "$f" || basename "$f" .mobileconfig; done' 2>/dev/null | tr '\n' ' ')"
   if [ -n "$NOPFS" ]; then
-    wrn "EnablePFS の無い古いプロファイル: ${NOPFS}（rekey 時に切断される）→ make sync-scripts 後に make remove/client で作り直し、端末へ入れ直す"
+    wrn "EnablePFS の無い古いプロファイル: ${NOPFS}（rekey 時に切断される）→ make sync-scripts 後に make remove NAME=<名前> && make client NAME=<名前> で作り直し、端末へ入れ直す"
   else
-    pass "プロファイルは PFS 有効（rekey で切断されない）"
+    pass "サーバー上のプロファイルは EnablePFS あり（端末に入っている古いプロファイルは検査できない。作り直した場合は端末へ入れ直すこと）"
   fi
   if [ "$CRL" = "false" ]; then
     bad "証明書失効(CRL)が無効: プロファイル漏洩・端末紛失時に接続を止められない（証明書は10年有効）→ enable_cert_revocation=true にして make setup"
