@@ -48,10 +48,21 @@ COOLDOWN_DIR="$STATE_DIR/cooldown"
 COOLDOWN_SECONDS=3600
 ACTIVE_WINDOW=900
 PEER_IP_WINDOW=3600
-SSH_LOGIN_WINDOW=3600
+# 監視期間の上限（分）。last_run がこれより古ければ必ずここで打ち切る。
+#   timer の停止・再起動・last_run の書き込み失敗で窓が広がると、同じ事象を毎周期
+#   数え直すことになり、件数が減らないまま閾値を超え続けて同じ警告が延々と飛ぶ。
+#   取りこぼしは黙って捨てず、メール本文と journal に明示する。
+MAX_WINDOW_MIN=60
+# 通知済みログインの保持期間。監視期間の上限より必ず長くすること。これが短いと、
+# 窓が広がったときに「保持期限は切れたが監視期間内」のログインが毎周期 再通知され、
+# 5 分ごとに同じメールが届き続ける。
+SSH_LOGIN_WINDOW=$((MAX_WINDOW_MIN * 60 * 2))
 SSH_LOGIN_MAX_LINES=20
 TAB="$(printf '\t')"
 NOTIFY=/usr/local/sbin/orenovpn-notify
+# 監視期間（compute_since が設定）。打ち切った場合は WINDOW_TRUNCATED=true。
+SINCE=""
+WINDOW_TRUNCATED=false
 
 logg() { printf '[watch] %s\n' "$*" >&2; }
 
@@ -87,13 +98,41 @@ alert() {
 }
 
 # ---- 監視期間（前回実行時刻から今まで。初回は 5 分前から）------------------
-since_arg() {
-  local f="$STATE_DIR/last_run"
-  if [ -f "$f" ]; then
-    cat "$f"
-  else
-    echo "5 min ago"
+# 上限 MAX_WINDOW_MIN で必ず打ち切る。結果は SINCE / WINDOW_TRUNCATED に入れる
+# （コマンド置換はサブシェルで走り、WINDOW_TRUNCATED の更新が呼び出し元へ伝わらない）。
+compute_since() {
+  local f="$STATE_DIR/last_run" ts epoch now
+  WINDOW_TRUNCATED=false
+  if [ ! -f "$f" ]; then
+    SINCE="5 min ago"
+    return 0
   fi
+  ts="$(cat "$f" 2>/dev/null || true)"
+  # 空文字は date に渡さない。GNU date は -d "" を「今日の 00:00」として受けるため、
+  # 書き込み失敗などで last_run が空になると、深夜 0〜1 時の間だけ上限検査をすり抜けて
+  # SINCE="" になる。journalctl は空の期間を解釈できないので、全検知が黙って 0 件になる。
+  epoch=0
+  if [ -n "$ts" ]; then
+    epoch="$(date -d "$ts" +%s 2>/dev/null || echo 0)"
+  fi
+  now="$(date +%s)"
+  # 読めない・未来（時刻ずれ）・上限超過はすべて上限へ丸める
+  if [ "${epoch:-0}" -le 0 ] || [ "$epoch" -gt "$now" ] \
+     || [ "$((now - epoch))" -gt "$((MAX_WINDOW_MIN * 60))" ]; then
+    WINDOW_TRUNCATED=true
+    SINCE="${MAX_WINDOW_MIN} min ago"
+    logg "監視期間を直近 ${MAX_WINDOW_MIN} 分に打ち切り（last_run=${ts:-なし}）"
+    return 0
+  fi
+  SINCE="$ts"
+}
+
+# 打ち切ったことをメール本文に添える。黙って捨てると「この期間はこれで全部」と
+# 読まれてしまうため、取りこぼしがある事実は必ず申告する。
+window_note() {
+  [ "$WINDOW_TRUNCATED" = "true" ] || return 0
+  printf '\n  ※ 前回実行から時間が空いたため、監視期間を直近 %s 分に打ち切りました。\n     その間の取りこぼしがあります（systemctl status orenovpn-watch.timer を確認）。' \
+    "$MAX_WINDOW_MIN"
 }
 
 # ---- (1) SSH 認証失敗の急増 -------------------------------------------------
@@ -111,7 +150,7 @@ check_ssh_fail() {
 ブルートフォースの可能性があります。fail2ban の ban 状況と allowed_ssh_cidr を確認してください。
 
   期間: ${since} 〜 現在
-  確認: sudo fail2ban-client status sshd"
+  確認: sudo fail2ban-client status sshd$(window_note)"
   fi
 }
 
@@ -182,7 +221,7 @@ ${entries}
   ※ 自分の作業（make setup / make client 等）でも届きます。除外したい接続元があれば
      /etc/orenovpn/orenovpn.env の ALERT_SSH_LOGIN_IGNORE_IPS に IP を並べてください
      （現在: ${ALERT_SSH_LOGIN_IGNORE_IPS:-未設定}）。通知自体を止めるなら
-     ENABLE_SSH_LOGIN_ALERT=\"false\"。"
+     ENABLE_SSH_LOGIN_ALERT=\"false\"。$(window_note)"
 }
 
 # ---- (2) 新規 VPN 接続（WireGuard）-----------------------------------------
@@ -293,7 +332,7 @@ check_egress() {
 
   件数: ${count}（監視期間内）
   宛先 IP（上位）:
-${dsts}"
+${dsts}$(window_note)"
   fi
 }
 
@@ -417,7 +456,7 @@ if [ "$ENABLE_TRAFFIC_ALERT" != "true" ]; then
   exit 0
 fi
 
-SINCE="$(since_arg)"
+compute_since
 
 check_ssh_fail "$SINCE" || logg "check_ssh_fail 失敗"
 check_ssh_login "$SINCE" || logg "check_ssh_login 失敗"

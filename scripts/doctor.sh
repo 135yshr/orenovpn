@@ -229,8 +229,36 @@ if [ "$ALERT" = "true" ]; then
       pass "ブロックリスト登録数: $((n - nomatch))（ほかに除外 ${nomatch} 件）"
     fi
   fi
+  # 監視が黙って死んでいないかを検査する。ExecMainStatus が 0 以外だと last_run が
+  # 更新されず、監視期間が広がり続けて同じ警告が延々と飛ぶ（実際にメールが溢れた）。
+  # INFO 表示だけでは pass 扱いになり、この退行を素通しするため FAIL にする。
   last="$($S systemctl show -p ExecMainStatus --value orenovpn-watch.service 2>/dev/null || echo '')"
-  if [ -n "$last" ]; then echo "[INFO] 監視の直近実行ステータス: ${last}"; fi
+  if [ -z "$last" ]; then
+    wrn "監視の直近実行ステータスを取得できない → systemctl status orenovpn-watch.service"
+  elif [ "$last" = "0" ]; then
+    pass "監視の直近実行は正常終了"
+  else
+    bad "監視の直近実行が失敗(ExecMainStatus=${last}) → sudo journalctl -u orenovpn-watch -n 50"
+  fi
+  # last_run の鮮度。timer は 5 分周期なので、15 分以上古ければ監視は止まっている。
+  LASTRUN="$($S cat /var/lib/orenovpn/watch/last_run 2>/dev/null || true)"
+  if [ -z "$LASTRUN" ]; then
+    wrn "監視の last_run が無い（まだ一度も完走していない可能性）"
+  else
+    LR_EPOCH="$(date -d "$LASTRUN" +%s 2>/dev/null || echo 0)"
+    LR_AGE=$(( $(date +%s) - LR_EPOCH ))
+    if [ "$LR_EPOCH" -le 0 ]; then
+      bad "監視の last_run を解釈できない（${LASTRUN}）"
+    elif [ "$LR_AGE" -lt 0 ]; then
+      # 未来の時刻は経過時間が負になり、古さの判定をすり抜けて「正常」に見えてしまう。
+      # 監視が止まっていても last_run の時刻を過ぎるまで検知できないため FAIL にする。
+      bad "監視の last_run が未来の時刻（${LASTRUN}）→ 時刻ずれか状態ファイルの破損。sudo journalctl -u orenovpn-watch -n 50"
+    elif [ "$LR_AGE" -gt 900 ]; then
+      bad "監視が $((LR_AGE / 60)) 分前から更新されていない（last_run=${LASTRUN}）→ sudo journalctl -u orenovpn-watch -n 50"
+    else
+      pass "監視は $((LR_AGE / 60)) 分前に実行済み（last_run 更新中）"
+    fi
+  fi
 else
   echo "[INFO] 通信監視は無効（ENABLE_TRAFFIC_ALERT!=true）"
 fi
