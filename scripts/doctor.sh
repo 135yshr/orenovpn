@@ -111,6 +111,14 @@ if [ "$PROTO" = "ikev2" ]; then
   if [ -n "$SRVADDR" ] && $S swanctl --list-sas 2>/dev/null | grep -qF "${SRVADDR}]"; then
     bad "クライアントにサーバー自身の ${SRVADDR} が割り当てられている（要 setup.sh 再実行と再接続）"
   fi
+  # サーバーは CHILD_SA に PFS を必須にしているため、EnablePFS の無い古いプロファイルは
+  # 端末起点の rekey が拒否され、接続から一定時間(macOS で約 24 分)で毎回切断される。
+  NOPFS="$($S sh -c 'for f in /etc/orenovpn/clients/*.mobileconfig; do [ -f "$f" ] || continue; grep -q "<key>EnablePFS</key>" "$f" || basename "$f" .mobileconfig; done' 2>/dev/null | tr '\n' ' ')"
+  if [ -n "$NOPFS" ]; then
+    wrn "EnablePFS の無い古いプロファイル: ${NOPFS}（rekey 時に切断される）→ make sync-scripts 後に make remove/client で作り直し、端末へ入れ直す"
+  else
+    pass "プロファイルは PFS 有効（rekey で切断されない）"
+  fi
   if [ "$CRL" = "false" ]; then
     bad "証明書失効(CRL)が無効: プロファイル漏洩・端末紛失時に接続を止められない（証明書は10年有効）→ enable_cert_revocation=true にして make setup"
   elif $S test -f /etc/swanctl/x509crl/orenovpn.crl; then
