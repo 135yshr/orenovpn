@@ -58,6 +58,8 @@ MAX_WINDOW_MIN=60
 # 5 分ごとに同じメールが届き続ける。
 SSH_LOGIN_WINDOW=$((MAX_WINDOW_MIN * 60 * 2))
 SSH_LOGIN_MAX_LINES=20
+# SSH 認証失敗の本文に並べる接続元 IP の上限（出口検知の上位表示と同じ考え方）。
+SSH_FAIL_MAX_SRC=10
 TAB="$(printf '\t')"
 NOTIFY=/usr/local/sbin/orenovpn-notify
 # 監視期間（compute_since が設定）。打ち切った場合は WINDOW_TRUNCATED=true。
@@ -136,22 +138,63 @@ window_note() {
 }
 
 # ---- (1) SSH 認証失敗の急増 -------------------------------------------------
+# 接続元 IP を件数つきで降順に返す（"<件数> <IP>" の行）。
+#   sshd は "from <IP>"、PAM は "rhost=<IP>" の形で出すため両方を拾う。
+ssh_fail_sources() {
+  journalctl -u ssh -u sshd --since "$1" 2>/dev/null \
+    | grep -E 'Failed password|Invalid user|authentication failure' \
+    | grep -oE '(from |rhost=)[0-9a-fA-F.:]+' \
+    | sed -E 's/^(from |rhost=)//' \
+    | sort | uniq -c | sort -rn || true
+}
+
 check_ssh_fail() {
-  local since count
+  local since count srcs uniq_n hint block
   since="$1"
   command -v journalctl >/dev/null 2>&1 || return 0
   count="$(journalctl -u ssh -u sshd --since "$since" 2>/dev/null \
     | grep -cE 'Failed password|Invalid user|authentication failure' || true)"
   count="${count:-0}"
-  if [ "$count" -ge "$ALERT_SSH_FAIL_THRESHOLD" ]; then
-    alert "ssh_fail" \
-      "SSH 認証失敗の急増を検知（${count} 件）" \
-      "監視期間内に SSH 認証失敗が ${count} 件発生しました（閾値 ${ALERT_SSH_FAIL_THRESHOLD} 件）。
-ブルートフォースの可能性があります。fail2ban の ban 状況と allowed_ssh_cidr を確認してください。
+  [ "$count" -ge "$ALERT_SSH_FAIL_THRESHOLD" ] || return 0
 
-  期間: ${since} 〜 現在
-  確認: sudo fail2ban-client status sshd$(window_note)"
+  # 件数だけでは「1 台からの総当たり」と「多数から 1 回ずつ（無差別スキャン）」が
+  # 区別できない。後者は fail2ban の maxretry に届かず ban されないため、
+  # 本文の「fail2ban を確認」に従っても何も出てこず手がかりが途切れる。
+  # 接続元の数が唯一の判別材料なので、必ず本文に出す。
+  srcs="$(ssh_fail_sources "$since")"
+  uniq_n="$(printf '%s' "$srcs" | grep -c . || true)"
+  uniq_n="${uniq_n:-0}"
+
+  if [ "$uniq_n" -eq 0 ]; then
+    # ログの書式が想定と違っても件数だけは届ける（黙って送らないほうが悪い）
+    hint="接続元 IP を抽出できませんでした（ログの書式を確認してください）。"
+    block=""
+  elif [ "$uniq_n" -le 2 ]; then
+    hint="接続元は ${uniq_n} 個の IP に集中しています。総当たりの可能性が高いので fail2ban の ban を確認してください。"
+    block="
+  接続元（件数 / IP）:
+$(printf '%s\n' "$srcs" | head -n "$SSH_FAIL_MAX_SRC")
+"
+  else
+    hint="接続元は ${uniq_n} 個の IP に分散しています。無差別スキャンの可能性が高く、fail2ban は接続元ごとの回数(maxretry)で判定するため ban されないことがあります。"
+    block="
+  接続元（件数 / IP・上位 ${SSH_FAIL_MAX_SRC}）:
+$(printf '%s\n' "$srcs" | head -n "$SSH_FAIL_MAX_SRC")$(
+      [ "$uniq_n" -gt "$SSH_FAIL_MAX_SRC" ] \
+        && printf '\n  ...ほか %s 件' "$((uniq_n - SSH_FAIL_MAX_SRC))" || true)
+"
   fi
+
+  alert "ssh_fail" \
+    "SSH 認証失敗の急増を検知（${count} 件 / ${uniq_n} IP）" \
+    "監視期間内に SSH 認証失敗が ${count} 件発生しました（閾値 ${ALERT_SSH_FAIL_THRESHOLD} 件）。
+${hint}
+${block}
+  期間: ${since} 〜 現在
+  確認: sudo fail2ban-client status sshd
+        sudo journalctl -u ssh --since '${since}' | grep -E 'Failed|Invalid'
+  対処: allowed_ssh_cidr で接続元を絞る
+  ※ パスワード認証は無効（鍵のみ）のため、これらの試行が成功することはありません。$(window_note)"
 }
 
 # ---- (6) SSH ログイン成功の通知 --------------------------------------------
